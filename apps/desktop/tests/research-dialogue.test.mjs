@@ -6,20 +6,17 @@ import {acceptsResearchDelta,beginChat,failChat,finishChat,finishJobSearchChat,f
 import {resolveResearchSession} from '../dist-electron/shared/research-session.js';
 import {modelHistoryWithinBudget} from '../dist-electron/shared/research-chat-ipc.js';
 
-test('explicit company needs no link, while ambiguous research asks in the conversation',()=>{
+test('explicit company needs no link, while an ambiguous question reaches the Agent',()=>{
  const direct=decideResearchRequest('腾讯的经营和员工福利怎么样？',{hasJob:false});
  assert.equal(direct.kind,'research');assert.equal(direct.company,'腾讯');
  const unclear=decideResearchRequest('这家公司福利怎么样？',{hasJob:false});
- assert.equal(unclear.kind,'clarify');assert.equal(unclear.pending.missing,'company');
- const answered=decideResearchRequest('腾讯',{hasJob:false,pending:unclear.pending});
- assert.equal(answered.kind,'research');assert.equal(answered.company,'腾讯');assert.equal(answered.question,'这家公司福利怎么样？');
+ assert.equal(unclear.kind,'chat');
  assert.equal(decideResearchRequest('你好',{hasJob:false}).kind,'chat');
 });
-test('a broad company question asks for scope and resumes the same company',()=>{
+test('a broad explicit company question can begin finite Agent research',()=>{
  const broad=decideResearchRequest('腾讯怎么样',{hasJob:false});
- assert.equal(broad.kind,'clarify');assert.equal(broad.pending.missing,'focus');assert.match(broad.reply,/经营|岗位/);
- const resumed=decideResearchRequest('经营和产品',{hasJob:false,pending:broad.pending});
- assert.equal(resumed.kind,'research');assert.equal(resumed.company,'腾讯');assert.match(resumed.question,/经营和产品/);
+ assert.equal(broad.kind,'research');assert.equal(broad.company,'腾讯');
+ assert.equal(decideResearchRequest('什么是公司治理？',{hasJob:false}).kind,'chat');
 });
 test('a transient chat database lock retries the same snapshot once',async()=>{
  const calls=[];await saveResearchChatWithRetry({id:'chat-a'},async item=>{calls.push(item.id);if(calls.length===1)throw Error('research_chat_storage:sqlite_busy');});
@@ -124,7 +121,7 @@ test('A and B history selection binds the next turn to the selected session',()=
 test('toStored fixture preserves a long answer and migration verifies the backend readback',async()=>{
  const fixture=JSON.parse(readFileSync(new URL('../../../tests/fixtures/research_chat_to_stored.json',import.meta.url),'utf8'));
  const local={id:fixture.id,title:'示例公司研究',updatedAt:'2026-09-25T00:00:00Z',turns:fixture.turns,reportIds:fixture.report_ids,subjectCompany:fixture.subject_company,subjectTitle:fixture.subject_title,jobId:fixture.job_id,researchMode:fixture.research_mode};
- assert.deepEqual(JSON.parse(JSON.stringify(toStoredResearchChat('workspace-fixture',local))),fixture);
+ assert.deepEqual(JSON.parse(JSON.stringify(toStoredResearchChat('workspace-fixture',local))),{...fixture,updated_at:local.updatedAt});
  assert(local.turns[1].text.length>8000);
  const values=new Map();globalThis.localStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)};
  assert.equal(saveResearchChats('workspace-fixture',[local]),true);

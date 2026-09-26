@@ -48,7 +48,7 @@ export class BossCollector {
       if(this.paused)throw Error(`${this.paused}:BOSS 已暂停`);
       const started=this.now(),deadline=started+Math.max(1,Math.min(60,input.seconds))*1000,controller=new AbortController();this.controller=controller;
       const emit=(stage:SourceCollectionProgress['stage'],message:string)=>{for(const cb of listeners)cb({stage,count:this.context?.jobs.size||0,message,titles:[...(this.context?.jobs.values()||[])].slice(0,5).map(j=>j.title)});};
-      let context:Context|undefined,batches=0,stop='batch_budget',detailsRead=0;
+      let context:Context|undefined,batches=0,stop='batch_budget';
       try{
         if(input.cursor){if(!this.context||this.context.token!==input.cursor||this.context.key!==url||this.now()-this.context.at>600000)throw Error('continuation_expired:上一批页面已变化，请重新检索');context=this.context;}
         else{context={key:url,url,token:randomUUID(),jobs:new Map(),details:new Map(),at:this.now()};this.context=context;emit('loading','正在读取 BOSS 岗位列表');await this.pace(controller.signal,deadline);await this.bounded(()=>this.driver.load(url,false,controller.signal),controller.signal,deadline);}
@@ -65,10 +65,6 @@ export class BossCollector {
           noGrowth=context.jobs.size===before?noGrowth+1:0;emit('listing',`已读取 ${context.jobs.size} 个去重岗位（${batches} 批）`);
           if(page.empty||page.ended){stop='complete';break;}if(noGrowth>=2){stop='no_growth';break;}if(context.jobs.size>=100){stop='record_budget';break;}
         }
-        // Enrich at most two keyword-relevant candidates, after the complete bounded list phase.
-        const words=input.keyword.toLowerCase().split(/\s+/).filter(Boolean),score=(j:BossJob)=>words.filter(w=>j.title.toLowerCase().includes(w)).length;
-        const candidates=[...context.jobs.values()].filter(j=>score(j)>0&&!context!.details.has(j.url)).sort((a,b)=>score(b)-score(a)).slice(0,2);
-        for(const job of candidates){if(deadline-this.now()<6000)break;emit('details',`列表已就绪，补全候选 JD（${detailsRead+1}/${candidates.length}）`);try{context.details.set(job.url,await this.detail(job.url,controller.signal,deadline));detailsRead++;}catch(e){const message=String(e);if(this.paused||controller.signal.aborted||message.includes('time_budget'))throw e;/* list remains valid when one detail lacks a full JD */}}
       }catch(error){const message=error instanceof Error?error.message:String(error);stop=message.split(':')[0];if(stop==='login_required'){this.pause('login_required');}if(controller.signal.aborted&&stop!=='time_budget')stop='cancelled';if(stop==='continuation_expired')throw error;}
       finally{if(this.controller===controller)this.controller=undefined;}
       if(stop==="source_contract_error"){this.failures++;this.backoffUntil=this.now()+Math.min(300000,30000*2**(this.failures-1));}else if(stop==="complete"||stop==="batch_budget"){this.failures=0;}

@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,6 +48,48 @@ def _job(number: int, *, description: str = "Python FastAPI", location="上海")
     )
 
 
+def test_monthly_salary_presets_overlap_inclusive_and_keep_unknown() -> None:
+    def match(job, low, high):
+        return DesktopJobService._matches(
+            job,
+            filters=DesktopJobFilters(
+                salary_min_k=low,
+                salary_max_k=high,
+                salary_mode="overlap",
+                unknown_policy="include",
+            ),
+            read_ids=set(),
+        )
+
+    overlap = _job(1).model_copy(update={"salary_min_k": 15, "salary_max_k": 25})
+    outside = _job(2).model_copy(update={"salary_min_k": 10, "salary_max_k": 15})
+    boundary = _job(3).model_copy(update={"salary_min_k": 10, "salary_max_k": 20})
+    unknown = _job(4).model_copy(update={"salary_min_k": None, "salary_max_k": None})
+    assert match(overlap, 20, 50)
+    assert not match(outside, 20, 50)
+    assert match(boundary, 20, 50)
+    assert match(boundary, None, 10)
+    assert match(overlap, 50, None) is False
+    assert match(unknown, 20, 50)
+
+    annual = normalize_job(
+        RawJobRecord(
+            source_kind=SourceKind.CAREER_SITE,
+            source_name="猎聘",
+            source_url="https://www.liepin.com/job/annual",
+            external_id="annual",
+            payload={
+                "title": "年薪岗位",
+                "company": "样例",
+                "raw_salary_text": "30-50万/年",
+                "apply_url": "https://www.liepin.com/job/annual",
+            },
+        )
+    )
+    assert annual.salary is not None and annual.salary.period.value == "year"
+    assert match(annual, 20, 50)  # annual amount remains unverified monthly
+
+
 def test_snapshot_pagination_is_stable_without_duplicates_or_gaps(tmp_path) -> None:
     _database, workspace, jobs, service = _services(tmp_path)
     values = [_job(number) for number in range(55)]
@@ -82,6 +125,89 @@ def test_snapshot_pagination_is_stable_without_duplicates_or_gaps(tmp_path) -> N
         page_size=20,
     )
     assert [item["job"]["job_id"] for item in repeated["items"]] == ids[:20]
+
+
+def test_default_snapshot_scores_each_unique_job_once(tmp_path, monkeypatch) -> None:
+    import jobfindsme.search.jobs as jobs_module
+
+    _database, workspace, jobs, service = _services(tmp_path)
+    item = _job(1)
+    jobs.upsert(workspace.workspace_id, item)
+    original = jobs_module.evaluate
+    calls = []
+
+    def counted(job, resume, weights):
+        calls.append(job.job_id)
+        return original(job, resume, weights)
+
+    monkeypatch.setattr(jobs_module, "evaluate", counted)
+    service.create_snapshot(
+        workspace_id=workspace.workspace_id,
+        intent="AI 应用工程师",
+        job_ids=[item.job_id, item.job_id],
+        resume_version=None,
+        filters=DesktopJobFilters(),
+    )
+    assert calls == [item.job_id]
+
+
+def test_concurrent_source_batches_do_not_lose_jobs(tmp_path) -> None:
+    _database, workspace, jobs, service = _services(tmp_path)
+    values = [_job(number) for number in range(4)]
+    for item in values:
+        jobs.upsert(workspace.workspace_id, item)
+    run_id = service.create_snapshot(
+        workspace_id=workspace.workspace_id,
+        intent="AI 应用工程师",
+        job_ids=[],
+        resume_version=None,
+        filters=DesktopJobFilters(),
+    )
+
+    def append(item):
+        service.append_snapshot(
+            workspace_id=workspace.workspace_id,
+            run_id=run_id,
+            job_ids=[item.job_id],
+            resume_version=None,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        list(workers.map(append, values))
+    page = service.page(
+        workspace_id=workspace.workspace_id, run_id=run_id, page=1, page_size=10
+    )
+    assert {row["job"]["job_id"] for row in page["items"]} == {
+        item.job_id for item in values
+    }
+
+
+def test_append_rejects_changed_search_context(tmp_path) -> None:
+    _database, workspace, jobs, service = _services(tmp_path)
+    item = _job(1)
+    jobs.upsert(workspace.workspace_id, item)
+    run_id = service.create_snapshot(
+        workspace_id=workspace.workspace_id,
+        intent="AI 工程师",
+        job_ids=[],
+        resume_version=None,
+        filters=DesktopJobFilters(cities=("上海",)),
+    )
+    with pytest.raises(ValueError, match="filters changed"):
+        service.append_snapshot(
+            workspace_id=workspace.workspace_id,
+            run_id=run_id,
+            job_ids=[item.job_id],
+            resume_version=None,
+            expected_intent="AI 工程师",
+            expected_filters=DesktopJobFilters(cities=("北京",)),
+        )
+    assert (
+        service.page(
+            workspace_id=workspace.workspace_id, run_id=run_id, page=1, page_size=10
+        )["total"]
+        == 0
+    )
 
 
 def test_updated_job_does_not_replace_old_search_snapshot_jd(tmp_path) -> None:

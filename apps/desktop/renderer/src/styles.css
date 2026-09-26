@@ -478,10 +478,12 @@ nav button.active{background:var(--surface-selected);color:var(--text);box-shado
 /* Browser search controls share the existing neutral palette. */
 
 /* Distinct website/search actions and a live, neutral omnibox. */
+.citation-button{display:inline;border:0;background:transparent;color:#2563eb;padding:0 2px;font:inherit;cursor:pointer}.citation-button:hover,.citation-button:focus-visible{text-decoration:underline}.research-focused-evidence mark{background:#fff1aa;color:inherit}
 .browser-start-modes{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}.browser-start-modes button{flex:1;border:0;border-radius:0;background:transparent;padding:10px 4px;color:var(--text-muted)}.browser-start-modes button[aria-selected=true]{color:var(--text);border-bottom:2px solid var(--ink);font-weight:600}
 .native-browser-slot:has(.browser-new-page){grid-template-columns:minmax(0,1fr);justify-items:center;align-content:start}
 .browser-start-modes button{white-space:nowrap}
-.browser-address-form{flex:1;min-width:36px;margin:0 5px}.browser-toolbar .browser-address-form .browser-address{width:100%;margin:0;padding:3px 7px;border:1px solid transparent;border-radius:5px;height:28px;background:var(--surface-soft);color:var(--text);font-size:11px}.browser-toolbar .browser-address-form .browser-address:focus{border-color:var(--line);background:var(--surface)}
+.browser-address-form{display:flex;align-items:center;gap:4px;flex:1;min-width:36px;margin:0 5px}.browser-address-form select{max-width:76px;min-width:60px;border:0;background:var(--surface-soft);height:28px;font-size:10px}.browser-toolbar .browser-address-form .browser-address{width:100%;margin:0;padding:3px 7px;border:1px solid transparent;border-radius:5px;height:28px;background:var(--surface-soft);color:var(--text);font-size:11px}.browser-toolbar .browser-address-form .browser-address:focus{border-color:var(--line);background:var(--surface)}
+.browser-start-shortcuts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.browser-start-shortcuts button{border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:var(--surface)}
 
 .browser-new-page>label{margin:16px 0}.browser-start-actions{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-top:18px}.browser-start-actions>label{width:160px;max-width:60%;margin:0}.browser-start-actions>.primary-button{margin-left:auto;min-width:96px;height:38px}
 /* Compact scheduler and a single job-detail heading. */

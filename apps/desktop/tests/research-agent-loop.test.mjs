@@ -276,6 +276,18 @@ test('ordinary follow-up stays a conversation without research tools or report',
   assert.match(result.text,/哪个团队/);assert.equal(result.report,undefined);assert.deepEqual(invoked,[]);
  }finally{server.close();}
 });
+test('resume drafting reads only a confirmed redacted copy and creates no research report',async()=>{
+ let turn=0,reads=0,researchCalls=0;
+ const server=http.createServer((_request,response)=>{response.writeHead(200,{'Content-Type':'text/event-stream'});turn++;
+  const next=turn===1?tool('read_confirmed_resume',{},turn):{role:'assistant',content:'可把已确认的 Python 项目经历写得更具体；这是草稿建议。'};
+  sse(response,next,next.tool_calls?'tool_calls':'stop');});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const unexpected=async()=>{researchCalls++;throw Error('unexpected research call');};
+ const tools={readResume:async()=>{reads++;return {source_version_id:'v1',text:'Python 项目 [已过滤:个人信息]',limitations:'脱敏副本'};},findEvidence:unexpected,searchWeb:unexpected,readPage:unexpected,readJob:unexpected,readBrowserPage:unexpected,saveExecution:async()=>{},saveReport:unexpected};
+ try{const result=await runPiResearchAgent({workspaceId:'w1',requestId:'req_resume_draft',question:'帮我写简历项目描述草稿',history:[],research:false},{protocol:'openai',provider:'openai',endpoint:`http://127.0.0.1:${server.address().port}/v1`,model_id:'mock',status:'verified',auth_mode:'none'},'',tools,()=>{},new AbortController().signal);
+  assert.equal(reads,1);assert.equal(researchCalls,0);assert.equal(result.report,undefined);assert.match(result.text,/草稿建议/);
+ }finally{server.close();}
+});
 test('Pi asks a company scope question without inventing a research failure',async()=>{
  const server=http.createServer((_request,response)=>{response.writeHead(200,{'Content-Type':'text/event-stream'});sse(response,{role:'assistant',content:JSON.stringify({message:'你更关注腾讯的经营、岗位机会，还是工作体验？',claims:[]})},'stop');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -337,7 +349,7 @@ test('fabricated citation to an otherwise readable page cannot save a report',as
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  let saved=0;const tools={findEvidence:async()=>[],searchWeb:async()=>[{url:source.url,site:'zhihu',title:'原页',status:'search_hint_only'}],readPage:async()=>({...source,evidence_id:'ev_fabricated'}),readJob:async()=>null,readBrowserPage:async()=>source,saveExecution:async()=>{},saveReport:async()=>{saved++;return null;}};
- try{const result=await runPiResearchAgent({workspaceId:'w1',requestId:'req_fabricated',question:'示例公司研发如何',company:'示例公司',history:[],research:true},{protocol:'openai',provider:'openai',endpoint:`http://127.0.0.1:${server.address().port}/v1`,model_id:'mock',status:'verified',auth_mode:'none'},'',tools,()=>{},new AbortController().signal);assert.equal(saved,0);assert.equal(result.report,undefined);assert.match(result.text,/来源摘录/);assert.ok(result.text.includes(source.url));assert.ok(result.text.includes(source.excerpt));}
+ try{const result=await runPiResearchAgent({workspaceId:'w1',requestId:'req_fabricated',question:'示例公司研发如何',company:'示例公司',history:[],research:true},{protocol:'openai',provider:'openai',endpoint:`http://127.0.0.1:${server.address().port}/v1`,model_id:'mock',status:'verified',auth_mode:'none'},'',tools,()=>{},new AbortController().signal);assert.equal(saved,0);assert.equal(result.report,undefined);assert.match(result.text,/原文片段卡片/);assert.equal(result.evidence?.[0].url,source.url);assert.equal(result.evidence?.[0].excerpt,source.excerpt);}
  finally{server.close();}
 });
 

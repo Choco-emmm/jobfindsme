@@ -101,6 +101,23 @@ def test_conversation_execution_and_report_are_workspace_scoped(tmp_path):
             (report_id,),
         ).fetchone()
     assert report_id in saved["job_context_json"]
+    with store.database.connect() as connection:
+        row = connection.execute(
+            "SELECT evidence_id FROM research_evidence WHERE report_id=?", (report_id,)
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO research_corrections VALUES (?,?,?,?,?)",
+            (
+                "correction-test",
+                row["evidence_id"],
+                "wrong_entity",
+                "主体不符",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+    assert store.find_evidence(workspace, "示例公司") == []
+    with pytest.raises(ValueError, match="corrected source"):
+        store.save_report(workspace, {**report, "question": "另一轮研究"})
 
 
 def test_long_conversation_and_binding_round_trip_without_truncation(tmp_path):
@@ -457,6 +474,106 @@ def test_pdf_reader_keeps_page_citation_and_rejects_missing_entity(monkeypatch):
     assert missing["status"] == "entity_mismatch"
 
 
+def test_pdf_research_selects_later_question_page_after_subject_check(monkeypatch):
+    import io
+
+    from reportlab.pdfgen import canvas
+
+    monkeypatch.setattr(
+        agent_sources, "validate_public_http_url", lambda *_a, **_k: None
+    )
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output)
+    pdf.drawString(
+        30, 700, "ExampleCorp annual filing and company identity information. " * 2
+    )
+    pdf.showPage()
+    pdf.drawString(
+        30,
+        700,
+        "General operations and business description with no target figures. " * 2,
+    )
+    pdf.showPage()
+    pdf.drawString(
+        30,
+        700,
+        "The profit increased in 2025 according to the disclosed financial statements. "
+        * 2,
+    )
+    pdf.save()
+    body = output.getvalue()
+
+    class Response:
+        headers = SimpleNamespace(
+            get_content_type=lambda: "application/pdf", get_content_charset=lambda: None
+        )
+
+        def geturl(self):
+            return "https://www.cninfo.com.cn/report.pdf"
+
+        def read(self, amount):
+            return body[:amount]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    row = agent_sources.read_original_page(
+        "https://www.cninfo.com.cn/report.pdf",
+        "ExampleCorp",
+        "cninfo",
+        question="What was the profit in 2025?",
+        opener=SimpleNamespace(open=lambda *_a, **_k: Response()),
+    )
+    assert row["status"] == "read_original"
+    assert row["context"]["page"] == 3
+    assert "profit increased in 2025" in row["excerpt"]
+    assert row["context"]["passage_id"]
+
+
+def test_html_research_uses_later_relevant_passage(monkeypatch):
+    monkeypatch.setattr(
+        agent_sources, "validate_public_http_url", lambda *_a, **_k: None
+    )
+    body = (
+        "<html><head><title>ExampleCorp report</title></head><body><article>"
+        "ExampleCorp business introduction. "
+        + "Other general information. " * 90
+        + "The research team announced a new language model. " * 4
+        + "</article></body></html>"
+    ).encode()
+
+    class Response:
+        headers = SimpleNamespace(
+            get_content_type=lambda: "text/html", get_content_charset=lambda: "utf-8"
+        )
+
+        def geturl(self):
+            return "https://www.cninfo.com.cn/report.html"
+
+        def read(self, amount):
+            return body[:amount]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    row = agent_sources.read_original_page(
+        "https://www.cninfo.com.cn/report.html",
+        "ExampleCorp",
+        "cninfo",
+        question="What did the research team announce?",
+        opener=SimpleNamespace(open=lambda *_a, **_k: Response()),
+    )
+    assert row["status"] == "read_original"
+    assert "new language model" in row["excerpt"]
+    assert row["context"]["start_char"] > 0
+
+
 def test_pdf_reader_rejects_large_or_unreadable_document(monkeypatch):
     monkeypatch.setattr(
         agent_sources, "validate_public_http_url", lambda *_args, **_kwargs: None
@@ -632,7 +749,7 @@ def test_research_endpoints_pass_remaining_time_to_source_reader(tmp_path, monke
     monkeypatch.setattr(
         app_module,
         "read_original_page",
-        lambda url, company, site, *, timeout: (
+        lambda url, company, site, *, timeout, question="": (
             seen.append(("read", timeout)) or {"status": "read_failed", "url": url}
         ),
     )

@@ -62,7 +62,7 @@ export function saveResearchChats(workspaceId:string,chats:SavedResearchChat[]):
 }
 
 export function toStoredResearchChat(workspaceId:string,chat:SavedResearchChat):Record<string,unknown>{
-  return {workspace_id:workspaceId,id:chat.id,subject_key:(chat.subjectCompany||"").toLocaleLowerCase().replace(/\s+/g,""),subject_company:chat.subjectCompany,subject_title:chat.subjectTitle,job_id:chat.jobId,research_mode:chat.researchMode,turns:chat.turns,report_ids:chat.reportIds.slice(-30),draft:chat.draft,pending:chat.pendingResearch,failure:chat.failure};
+  return {workspace_id:workspaceId,id:chat.id,updated_at:chat.updatedAt,subject_key:(chat.subjectCompany||"").toLocaleLowerCase().replace(/\s+/g,""),subject_company:chat.subjectCompany,subject_title:chat.subjectTitle,job_id:chat.jobId,research_mode:chat.researchMode,turns:chat.turns,report_ids:chat.reportIds.slice(-30),draft:chat.draft,pending:chat.pendingResearch,failure:chat.failure};
 }
 export async function saveResearchChatWithRetry(item:Record<string,unknown>,save:(item:Record<string,unknown>)=>Promise<unknown>):Promise<void>{
   try{await save(item);}catch(error){

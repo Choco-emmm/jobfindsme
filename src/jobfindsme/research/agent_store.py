@@ -169,6 +169,16 @@ class ResearchAgentStore:
         }
         reports = [str(value) for value in (item.get("report_ids") or [])[:30]]
         now = _now()
+        supplied = item.get("updated_at")
+        if isinstance(supplied, str):
+            try:
+                activity = datetime.fromisoformat(supplied.replace("Z", "+00:00"))
+                if activity.tzinfo is not None and activity <= datetime.now(
+                    UTC
+                ) + timedelta(minutes=1):
+                    now = activity.astimezone(UTC).isoformat()
+            except ValueError:
+                pass
         with self.database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._workspace(connection, workspace_id)
@@ -342,6 +352,13 @@ class ResearchAgentStore:
                    WHERE workspace_id=? ORDER BY updated_at DESC LIMIT 20""",
                 (workspace_id,),
             ).fetchall()
+            corrected = connection.execute(
+                """SELECT e.evidence_id,e.url,c.kind FROM research_corrections c
+                   JOIN research_evidence e ON e.evidence_id=c.evidence_id
+                   JOIN research_reports r ON r.report_id=e.report_id
+                   WHERE r.workspace_id=?""",
+                (workspace_id,),
+            ).fetchall()
             evidence: list[dict] = []
             for report in reports:
                 context = json.loads(report["job_context_json"])
@@ -364,12 +381,23 @@ class ResearchAgentStore:
                 continue
             evidence.extend(json.loads(execution["evidence_json"]))
         now = datetime.now(UTC)
+        corrected_ids = {row["evidence_id"] for row in corrected}
+        corrected_urls = {
+            str(row["url"] or "").split("#")[0]
+            for row in corrected
+            if row["kind"] in {"wrong_entity", "broken_link", "wrong_team"}
+        }
         seen: set[str] = set()
         result = []
         for item in evidence:
             if item.get(
                 "verification_status"
             ) != "independently_retrieved" or not _fresh(item, at=now):
+                continue
+            if (
+                item.get("evidence_id") in corrected_ids
+                or str(item.get("url") or "").split("#")[0] in corrected_urls
+            ):
                 continue
             dedupe = (
                 f"{item.get('url', '').split('#')[0]}|"
@@ -409,6 +437,27 @@ class ResearchAgentStore:
         ]
         if not verified:
             return None
+        with self.database.connect() as connection:
+            self._workspace(connection, workspace_id)
+            corrected = connection.execute(
+                """SELECT e.evidence_id,e.url,c.kind FROM research_corrections c
+                   JOIN research_evidence e ON e.evidence_id=c.evidence_id
+                   JOIN research_reports r ON r.report_id=e.report_id
+                   WHERE r.workspace_id=?""",
+                (workspace_id,),
+            ).fetchall()
+        corrected_ids = {row["evidence_id"] for row in corrected}
+        corrected_urls = {
+            str(row["url"] or "").split("#")[0]
+            for row in corrected
+            if row["kind"] in {"wrong_entity", "broken_link", "wrong_team"}
+        }
+        if any(
+            row.get("evidence_id") in corrected_ids
+            or str(row.get("url") or "").split("#")[0] in corrected_urls
+            for row in verified
+        ):
+            raise ValueError("corrected source cannot support a new report")
         for row in verified:
             parsed = urlsplit(row["url"])
             fixed_host = any(

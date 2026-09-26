@@ -25,13 +25,79 @@ from jobfindsme.connectors.http import (
 )
 
 from .service import (
-    _excerpt_around,
     _host_matches,
     _normalized,
     _page_published_at,
     _published_at,
     _ReadableHtml,
 )
+
+
+def _question_terms(question: str, company: str) -> tuple[str, ...]:
+    focus = question.casefold().replace(company.casefold(), " ")
+    words = re.findall(r"[a-z0-9][a-z0-9.+#-]{1,30}|[\u3400-\u9fff]{2,}", focus)
+    stop = {
+        "怎么",
+        "怎么样",
+        "如何",
+        "什么",
+        "情况",
+        "了解",
+        "一下",
+        "公司",
+        "这个",
+        "这家",
+        "是否",
+        "有没有",
+        "请问",
+    }
+    terms: list[str] = []
+    for word in words:
+        if re.fullmatch(r"[\u3400-\u9fff]+", word):
+            parts = re.split(r"(?:的|和|与|及|在|是|了|么|吗|请|帮我|看看)", word)
+            for part in parts:
+                if 2 <= len(part) <= 8 and part not in stop:
+                    terms.append(part)
+                elif len(part) > 8:
+                    terms.extend(
+                        part[index : index + 2] for index in range(len(part) - 1)
+                    )
+        elif word not in stop:
+            terms.append(word)
+    return tuple(dict.fromkeys(terms))[:12]
+
+
+def _relevant_passage(
+    text: str, question: str, company: str, limit: int = 1200
+) -> tuple[str, int]:
+    terms = _question_terms(question, company)
+    if not terms:
+        index = text.casefold().find(company.casefold())
+        start = max(0, index - limit // 3) if index >= 0 else 0
+        return text[start : start + limit], start
+    lowered = text.casefold()
+    positions = {0}
+    for term in terms:
+        cursor = 0
+        for _ in range(100):
+            index = lowered.find(term, cursor)
+            if index < 0:
+                break
+            positions.add(max(0, index - limit // 3))
+            cursor = index + len(term)
+    best = max(
+        positions,
+        key=lambda start: (
+            sum(
+                (4 if len(term) >= 4 else 2)
+                * lowered[start : start + limit].count(term)
+                for term in terms
+            ),
+            -start,
+        ),
+    )
+    return text[best : best + limit], best
+
 
 SITES = {
     "cninfo": ("cninfo.com.cn", "巨潮资讯", "official_disclosure"),
@@ -408,6 +474,7 @@ def read_original_page(
     company: str,
     site: str,
     *,
+    question: str = "",
     timeout: float = 4,
     opener=None,
 ) -> dict:
@@ -482,6 +549,7 @@ def read_original_page(
         }
     page_number = None
     title = ""
+    passage_start = 0
     if pdf_hint:
         try:
             reader = PdfReader(BytesIO(body), strict=True)
@@ -493,13 +561,18 @@ def read_original_page(
                     "limit": "encrypted or over 40 pages",
                 }
             has_text_layer = False
+            candidates: list[tuple[int, str, str, int]] = []
+            subject_found = False
             for index, page in enumerate(reader.pages):
                 candidate = " ".join((page.extract_text() or "").split())[:12000]
                 has_text_layer = has_text_layer or bool(candidate)
-                if _normalized(company) in _normalized(candidate):
-                    text, page_number = candidate, index + 1
-                    break
-            else:
+                subject_found = subject_found or _normalized(company) in _normalized(
+                    candidate
+                )
+                if candidate:
+                    passage, start = _relevant_passage(candidate, question, company)
+                    candidates.append((index + 1, candidate, passage, start))
+            if not subject_found:
                 return {
                     "url": final_url,
                     "site": site,
@@ -508,6 +581,15 @@ def read_original_page(
                     if has_text_layer
                     else "PDF has no readable text layer",
                 }
+            terms = _question_terms(question, company)
+            page_number, text, _passage, passage_start = max(
+                candidates,
+                key=lambda item: (
+                    sum(item[2].casefold().count(term) for term in terms),
+                    int(_normalized(company) in _normalized(item[1])),
+                    -item[0],
+                ),
+            )
         except Exception:
             return {
                 "url": final_url,
@@ -524,14 +606,18 @@ def read_original_page(
         anchored = bool(parser.article_text) or _normalized(company) in _normalized(
             title
         )
-    if len(text) < 50 or not anchored or _normalized(company) not in _normalized(text):
+    if (
+        len(text) < 50
+        or not anchored
+        or (not pdf_hint and _normalized(company) not in _normalized(text))
+    ):
         return {
             "url": final_url,
             "site": site,
             "status": "entity_mismatch",
             "limit": "company not anchored in title or article body",
         }
-    excerpt = _excerpt_around(text, company, limit=1200)
+    excerpt, passage_start = _relevant_passage(text, question, company)
     published_at = _page_published_at(parser.meta) if not pdf_hint else None
     evidence_id = (
         "ev_" + hashlib.sha256(f"{final_url}\0{excerpt}".encode()).hexdigest()[:24]
@@ -556,7 +642,13 @@ def read_original_page(
             "source_type": source_type,
             "content_type": "application/pdf" if pdf_hint else content_type,
             "page": page_number,
-            "company_match": "name_in_article",
+            "start_char": passage_start,
+            "end_char": passage_start + len(excerpt),
+            "passage_id": hashlib.sha256(
+                f"{final_url}\0{page_number}\0{passage_start}".encode()
+            ).hexdigest()[:20],
+            "source_id": hashlib.sha256(final_url.encode()).hexdigest()[:20],
+            "company_match": "name_in_document" if pdf_hint else "name_in_article",
             "entity_scope": "brand_or_legal_entity_unresolved",
             "link_status": "reachable",
             "research_topic": "company",

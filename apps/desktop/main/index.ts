@@ -236,20 +236,51 @@ ipcMain.handle("desktop:run-source-search", async (event, input: SourceSearchInp
   }
   if(!Array.isArray(input.source_ids)||!input.source_ids.length)throw new Error("请先选择岗位来源。");
   if(sourceCheckController)throw Error("全部来源检查进行中，请先结束检查");
+  if(sourceSearchActive)throw Error("岗位检索进行中，请先停止当前检索。");
   sourceSearchActive++;
   try{
+  const runStarted=Date.now();
   input={...input,filters:normalizeDiscoveryFilters(input.filters)};
   const preflight = await apiClient.searchPreflight(input);
   const epoch=sourceSearchEpoch;
-  const browser = await collectBrowserSourcePages(input, preflight, {client:apiClient,manager:sourceBrowserManager,isCancelled:()=>epoch!==sourceSearchEpoch,onProgress:value=>mainWindow?.webContents.send("desktop:source-collection-progress",value)});
-  const {boss_cursor: _cursor,...executionInput}=input;
-  const response=await apiClient.runSourceSearch({
-    ...executionInput,
-    resume_version_id: preflight.resume_version_id || undefined,
-    browser_pages: browser.pages,
-    browser_errors: browser.errors,
-  });
-  mainWindow?.webContents.send("desktop:source-status-changed");return {...response,source_diagnostics:browser.diagnostics};
+  const clientRunId=input.client_run_id||randomUUID();
+  let runId=input.existing_run_id;
+  const responses:import("../shared/contracts").SourceSearchResponse[]=[];
+  let firstUsableMs:number|null=null;
+  let queue=Promise.resolve();
+  const browser = await collectBrowserSourcePages(input, preflight, {client:apiClient,manager:sourceBrowserManager,isCancelled:()=>epoch!==sourceSearchEpoch,
+    onProgress:value=>mainWindow?.webContents.send("desktop:source-collection-progress",{...(value as object),workspace_id:input.workspace_id,client_run_id:clientRunId}),
+    onSourceCompleted:(sourceId,pages,error)=>{
+      queue=queue.then(async()=>{
+        if(epoch!==sourceSearchEpoch&&!pages.length)return;
+        const {boss_cursor:_boss,source_cursor:_source,client_run_id:_client,existing_run_id:_existing,...executionInput}=input;
+        const response=await apiClient!.runSourceSearch({...executionInput,source_ids:[sourceId],existing_run_id:runId,
+          resume_version_id:preflight.resume_version_id||undefined,
+          browser_pages:pages.length?{[sourceId]:pages}:{},browser_errors:error?{[sourceId]:error}:{}});
+        runId=response.result_page.run_id;responses.push(response);
+        if(firstUsableMs===null&&response.result_page.total>0)firstUsableMs=Date.now()-runStarted;
+        mainWindow?.webContents.send("desktop:source-collection-progress",{stage:"listing",count:response.result_page.total,
+          message:`${sourceId} 已保存并筛选 ${response.result_page.total} 条候选`,workspace_id:input.workspace_id,client_run_id:clientRunId,
+          run_id:runId,source_id:sourceId,batch_id:`${sourceId}:${responses.length}`,response});
+        const failure=error?.startsWith("login_required:")?"login_required":error?.startsWith("risk_control:")?"risk_control":null;
+        if(failure)await apiClient!.recordSourceRuntimeFailure(sourceId,failure,error!);
+      });return queue;
+    }});
+  try{await queue;}catch(error){throw Error(`已读取岗位，但保存本次结果失败：${String(error).slice(0,300)}`);}
+  let response=responses.at(-1);
+  if(!response){
+    const {boss_cursor:_boss,source_cursor:_source,client_run_id:_client,existing_run_id:_existing,...executionInput}=input;
+    response=await apiClient.runSourceSearch({...executionInput,source_ids:[],existing_run_id:runId,resume_version_id:preflight.resume_version_id||undefined});
+  }
+  mainWindow?.webContents.send("desktop:source-status-changed");
+  const query={keyword:preflight.keywords[0],city:input.city||input.filters?.cities?.[0]||""};
+  return {...response,allowed_source_ids:preflight.allowed_source_ids,blocked_sources:preflight.blocked_sources,
+    source_runs:responses.flatMap(batch=>batch.source_runs),source_diagnostics:{...browser.diagnostics,first_usable_ms:firstUsableMs},
+    planned_queries:preflight.allowed_source_ids.map(source_id=>({source_id,...query})),
+    executed_queries:preflight.allowed_source_ids.filter(source_id=>{
+      const source=browser.diagnostics.sources[source_id];return !!source&&
+        (source.site_pages>0||!/(cancelled|time_budget|browser_session_error|unsupported_cursor)/.test(browser.errors[source_id]||""));
+    }).map(source_id=>({source_id,...query})),local_filters:input.filters};
   }finally{sourceSearchActive--;}
 });
 
@@ -677,9 +708,11 @@ ipcMain.handle("desktop:run-research-chat",async(event,input:ResearchChatInput)=
     if(run.signal.aborted)throw Error("cancelled");
     return await runPiResearchAgent({workspaceId:input.workspace_id,sessionId:input.session_id,requestId:input.request_id,question:input.question,research:input.research,jobId:input.job_id,company:input.company,title:input.title,history:input.history},connection,apiKey,
       {
+        readResume:()=>apiClient!.previewAnalysisCopy({workspace_id:input.workspace_id,privacy_mode:"redact"}),
+        listSavedJobs:()=>apiClient!.listJobTracking(input.workspace_id),
         findEvidence:(company,signal,timeoutMs)=>apiClient!.findAgentEvidence(input.workspace_id,company,signal,timeoutMs),
         searchWeb:(company,searchQuery,site,originalQuestion,signal,timeoutMs)=>apiClient!.searchAgentSources({workspace_id:input.workspace_id,company,original_question:originalQuestion,search_query:searchQuery,site,timeout_ms:timeoutMs},signal,timeoutMs),
-        readPage:(company,site,url,signal,timeoutMs)=>apiClient!.readAgentPage({workspace_id:input.workspace_id,company,site,url,timeout_ms:timeoutMs},signal,timeoutMs),
+        readPage:(company,site,url,signal,timeoutMs,question)=>apiClient!.readAgentPage({workspace_id:input.workspace_id,company,site,url,question,timeout_ms:timeoutMs},signal,timeoutMs),
         readJob:(jobId,signal,timeoutMs)=>apiClient!.readAgentJob(input.workspace_id,jobId,signal,timeoutMs),
         readBrowserPage:(company,site,url,signal,timeoutMs)=>readIsolatedResearchPage(company,site,url,signal,timeoutMs),
         saveExecution:state=>apiClient!.saveAgentExecution(state),

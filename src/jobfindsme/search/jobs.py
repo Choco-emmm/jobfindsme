@@ -9,7 +9,12 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import uuid4
 
-from jobfindsme.contracts import EmploymentType, JobPosting, RecruitmentTrack
+from jobfindsme.contracts import (
+    EmploymentType,
+    JobPosting,
+    RecruitmentTrack,
+    SalaryPeriod,
+)
 from jobfindsme.importing.repository import JobRepository
 from jobfindsme.search.rules import DEFAULT_WEIGHTS, evaluate
 from jobfindsme.storage import Database
@@ -110,21 +115,22 @@ class DesktopJobService:
         score_payload: dict[str, dict] = {}
         ranked: list[tuple[float, str]] = []
         for job in eligible:
-            score, components, coverage = self._score(
-                job,
-                intent=intent,
-                resume_version=resume_version,
-                weights=normalized_weights,
-            )
-            score_payload[job.job_id] = {
-                "score": score,
-                "components": components,
-                "coverage": coverage,
-            }
             if set(normalized_weights) == set(DEFAULT_WEIGHTS):
-                score_payload[job.job_id] = evaluate(
-                    job, resume_version, normalized_weights
+                payload = evaluate(job, resume_version, normalized_weights)
+            else:
+                score, components, coverage = self._score(
+                    job,
+                    intent=intent,
+                    resume_version=resume_version,
+                    weights=normalized_weights,
                 )
+                payload = {
+                    "score": score,
+                    "components": components,
+                    "coverage": coverage,
+                }
+            score_payload[job.job_id] = payload
+            score = payload["score"]
             ranked.append((score, job.job_id))
         ranked.sort(key=lambda item: (-item[0], item[1]))
         ordered_ids = [job_id for _score, job_id in ranked]
@@ -152,6 +158,87 @@ class DesktopJobService:
                     now,
                     json.dumps([job.job_id for job in unique_jobs]),
                     json.dumps({job.job_id: job.content_hash for job in unique_jobs}),
+                ),
+            )
+        return run_id
+
+    def append_snapshot(
+        self,
+        *,
+        workspace_id: str,
+        run_id: str,
+        job_ids: list[str],
+        resume_version,
+        expected_intent: str | None = None,
+        expected_filters: DesktopJobFilters | None = None,
+    ) -> str:
+        """Append a validated source batch without changing earlier scores or order."""
+        with self.database.connect() as connection:
+            # Serialize the read/modify/write cycle across API workers. Without
+            # an early write lock, two source batches can overwrite each other.
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM desktop_search_runs WHERE run_id=? AND workspace_id=?",
+                (run_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError(run_id)
+            filters = DesktopJobFilters(**json.loads(row["filter_snapshot_json"]))
+            if expected_intent is not None and row["intent"] != expected_intent:
+                raise ValueError("search intent changed; start a new search")
+            if expected_filters is not None and json.loads(
+                json.dumps(asdict(expected_filters))
+            ) != json.loads(row["filter_snapshot_json"]):
+                raise ValueError("search filters changed; start a new search")
+            weights = self.weights_for_rule(
+                workspace_id=workspace_id, rule_version_id=row["rule_version_id"]
+            )
+            if row["resume_version_id"] != (
+                resume_version.version_id if resume_version else None
+            ):
+                raise ValueError("resume snapshot changed during search")
+            ordered = json.loads(row["ordered_job_ids_json"])
+            candidates = json.loads(row["candidate_job_ids_json"])
+            scores = json.loads(row["scores_json"])
+            refs = json.loads(row["job_snapshot_refs_json"])
+            read_ids = self._read_job_ids(workspace_id)
+            for job_id in dict.fromkeys(job_ids):
+                if job_id in candidates:
+                    continue
+                try:
+                    job = self.jobs.get(workspace_id=workspace_id, job_id=job_id)
+                except LookupError:
+                    continue
+                candidates.append(job_id)
+                refs[job_id] = job.content_hash
+                if not self._matches(job, filters=filters, read_ids=read_ids):
+                    continue
+                if set(weights) == set(DEFAULT_WEIGHTS):
+                    scores[job_id] = evaluate(job, resume_version, weights)
+                else:
+                    score, components, coverage = self._score(
+                        job,
+                        intent=row["intent"],
+                        resume_version=resume_version,
+                        weights=weights,
+                    )
+                    scores[job_id] = {
+                        "score": score,
+                        "components": components,
+                        "coverage": coverage,
+                    }
+                ordered.append(job_id)
+            connection.execute(
+                "UPDATE desktop_search_runs SET ordered_job_ids_json=?, "
+                "candidate_job_ids_json=?, scores_json=?, "
+                "job_snapshot_refs_json=? WHERE run_id=? AND workspace_id=?",
+                (
+                    json.dumps(ordered),
+                    json.dumps(candidates),
+                    json.dumps(scores, ensure_ascii=False),
+                    json.dumps(refs),
+                    run_id,
+                    workspace_id,
                 ),
             )
         return run_id
@@ -421,7 +508,15 @@ class DesktopJobService:
             if not cls._known_match(known, matched, filters.unknown_policy):
                 return False
         if filters.salary_min_k is not None or filters.salary_max_k is not None:
-            known = job.salary_min_k is not None and job.salary_max_k is not None
+            comparable = job.salary is None or (
+                job.salary.period is SalaryPeriod.MONTH
+                and job.salary.currency in {None, "CNY"}
+            )
+            known = (
+                comparable
+                and job.salary_min_k is not None
+                and job.salary_max_k is not None
+            )
             if filters.salary_mode == "overlap":
                 matched = (
                     known
@@ -446,7 +541,12 @@ class DesktopJobService:
                         or job.salary_max_k <= filters.salary_max_k
                     )
                 )
-            if not cls._known_match(known, matched, filters.unknown_policy):
+            # Unknown or nonmonthly source amounts stay visible for user review.
+            # Annual, daily and multi-month pay is never silently compared with
+            # a monthly filter through the legacy K projection.
+            if not known and filters.unknown_policy != "only":
+                pass
+            elif not cls._known_match(known, matched, filters.unknown_policy):
                 return False
         if (
             filters.experience_min_years is not None

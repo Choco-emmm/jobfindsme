@@ -27,6 +27,7 @@ const navItems: Array<[string, WorkPage]> = [["找工作", "discover"], ["岗位
 const settingsItems: Array<[string, SettingsTab]> = [["岗位来源", "sources"], ["模型设置", "models"], ["版本更新", "about"]];
 export function App() {
   const [chosenSources,setChosenSources] = useState<string[]>(()=>readSelectedSources(localStorage.getItem("jfm.sources.selected")));
+  const hadSourcePreference=useRef(localStorage.getItem("jfm.sources.selected")!==null);
   useEffect(()=>localStorage.setItem("jfm.sources.selected",JSON.stringify(chosenSources)),[chosenSources]);
   const [reports,setReports]=useState<ResearchReport[]>([]);
   function chooseSource(id:string, selected:boolean) {setChosenSources(current => {const previous=current;const next=selected ? [...new Set([...previous,id])] : previous.filter(s=>s!==id);localStorage.setItem("jfm.sources.selected",JSON.stringify(next));return next;});}
@@ -36,6 +37,10 @@ export function App() {
   function openSettings(tab:SettingsTab){setSettingsTab(tab);setPage("settings");}
   useEffect(()=>{const show=()=>openSettings("sources");window.addEventListener("jfm:show-sources",show);return()=>window.removeEventListener("jfm:show-sources",show);},[page]);
   const [data, setData] = useState<BootstrapData>();
+  useEffect(()=>{if(!data||hadSourcePreference.current)return;hadSourcePreference.current=true;
+    const first=data.sources.find(source=>source.source_id==="liepin"&&source.live_search_enabled)||data.sources.find(source=>source.live_search_enabled);
+    if(first)setChosenSources([first.source_id]);
+  },[data]);
   const [error, setError] = useState<string>();
   useEffect(()=>{const workspace=data?.workspaces[0]?.workspace_id;if(!workspace)return;let cancelled=false;void window.jobfindsme!.listResearchReports(workspace).then(value=>{if(!cancelled)setReports(value);}).catch(e=>setError(messageOf(e)));return()=>{cancelled=true;};},[data?.workspaces[0]?.workspace_id,page]);
   const [researchTarget,setResearchTarget]=useState<SearchResultItem["job"]>();

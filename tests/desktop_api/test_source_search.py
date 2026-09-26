@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -95,7 +96,9 @@ def test_source_catalog_separates_login_and_capability_gates(tmp_path) -> None:
         )
 
 
-def test_confirmed_resume_is_forced_into_private_search_keywords(tmp_path) -> None:
+def test_explicit_query_stays_remote_query_and_resume_is_local_matching_input(
+    tmp_path,
+) -> None:
     database, workspace, profiles = _confirmed_resume(tmp_path)
     service = DesktopSearchService(
         profiles=profiles,
@@ -109,7 +112,7 @@ def test_confirmed_resume_is_forced_into_private_search_keywords(tmp_path) -> No
     )
 
     assert preflight.resume_version_id is not None
-    assert "Python" in preflight.keywords[0]
+    assert preflight.keywords == ("AI 应用工程师",)
     assert "张三" not in " ".join(preflight.keywords)
     assert "13800138000" not in " ".join(preflight.keywords)
     assert preflight.allowed_source_ids == ("liepin",)
@@ -127,7 +130,7 @@ def test_confirmed_resume_can_search_without_manual_keywords_then_clear(
         workspace_id=workspace.workspace_id, intent="", source_ids=["liepin"]
     )
     assert generated.resume_version_id
-    assert 1 <= len(generated.keywords) <= 4
+    assert len(generated.keywords) == 1
     assert "Python" in " ".join(generated.keywords)
     assert "张三" not in " ".join(generated.keywords)
     assert "13800138000" not in " ".join(generated.keywords)
@@ -229,6 +232,12 @@ def test_production_connector_factory_reuses_liepin_without_legacy_cdp() -> None
 
 def test_no_resume_keywords_use_only_explicit_intent() -> None:
     assert build_search_keywords(intent="数据工程师", resume=None) == ("数据工程师",)
+    resume = SimpleNamespace(
+        version_id="resume_1",
+        content={"skills": ["Python、RAG、SQL"], "experience": ["FastAPI 项目"]},
+    )
+    assert build_search_keywords(intent="AI 工程师", resume=resume) == ("AI 工程师",)
+    assert build_search_keywords(intent="", resume=resume) == ("Python",)
 
 
 def test_source_search_api_applies_backend_gates_before_adapter(tmp_path) -> None:
@@ -425,6 +434,143 @@ def test_boss_partial_collection_keeps_jobs_before_revoking_gate(tmp_path):
     assert body["source_runs"][0]["elapsed_seconds"] == 7
     assert body["result_page"]["total"] == 1
     assert not sources.get("boss").live_search_enabled
+
+
+def test_source_batches_append_without_reordering_or_rescoring_previous_jobs(tmp_path):
+    database, workspace, _ = _confirmed_resume(tmp_path)
+    client = TestClient(create_app(token="test-secret", database_path=database.path))
+    headers = {"Authorization": "Bearer test-secret"}
+
+    def batch(external_id, existing_run_id=None):
+        record = {
+            "external_id": external_id,
+            "source_name": "猎聘",
+            "source_url": "https://www.liepin.com/",
+            "payload": {
+                "title": "Python工程师",
+                "company": f"样例{external_id}",
+                "description": "Python",
+                "url": f"https://www.liepin.com/job/{external_id}.shtml",
+            },
+        }
+        response = client.post(
+            "/v1/source-searches",
+            headers=headers,
+            json={
+                "workspace_id": workspace.workspace_id,
+                "intent": "Python",
+                "source_ids": ["liepin"],
+                "max_pages": 1,
+                "existing_run_id": existing_run_id,
+                "browser_pages": {
+                    "liepin": [{"records": [record], "next_cursor": None}]
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["result_page"]
+
+    first = batch("one")
+    repeated = batch("one", first["run_id"])
+    appended = batch("two", first["run_id"])
+    assert repeated["total"] == 1
+    assert appended["run_id"] == first["run_id"]
+    assert appended["total"] == 2
+    assert appended["items"][0] == first["items"][0]
+    missing = client.post(
+        "/v1/source-searches",
+        headers=headers,
+        json={
+            "workspace_id": workspace.workspace_id,
+            "intent": "Python",
+            "source_ids": ["liepin"],
+            "existing_run_id": "search_missing",
+            "browser_pages": {"liepin": [{"records": [], "next_cursor": None}]},
+        },
+    )
+    assert missing.status_code == 404
+
+
+def test_salary_yuan_input_is_not_a_backend_k_value(tmp_path):
+    database, workspace, _ = _confirmed_resume(tmp_path)
+    client = TestClient(create_app(token="test-secret", database_path=database.path))
+    base = {
+        "workspace_id": workspace.workspace_id,
+        "intent": "agent",
+        "source_ids": ["liepin"],
+    }
+    headers = {"Authorization": "Bearer test-secret"}
+    invalid = client.post(
+        "/v1/search-preflight",
+        headers=headers,
+        json={**base, "filters": {"salary_min_k": 20000}},
+    )
+    assert invalid.status_code == 422
+    valid = client.post(
+        "/v1/search-preflight",
+        headers=headers,
+        json={**base, "filters": {"salary_min_k": 20}},
+    )
+    assert valid.status_code == 200
+
+
+def test_agent_two_sources_and_20_to_50k_filter_keep_overlap_and_unknown(tmp_path):
+    database, workspace, _ = _confirmed_resume(tmp_path)
+    client = TestClient(create_app(token="test-secret", database_path=database.path))
+    headers = {"Authorization": "Bearer test-secret"}
+
+    def record(source_name, external_id, company, salary=None):
+        return {
+            "external_id": external_id,
+            "source_name": source_name,
+            "source_url": "https://www.liepin.com/"
+            if source_name == "猎聘"
+            else "https://careers.tencent.com/",
+            "payload": {
+                "title": "Agent 工程师",
+                "company": company,
+                "description": "Agent 开发",
+                "url": f"https://example.org/jobs/{external_id}",
+                **({"raw_salary_text": salary} if salary else {}),
+            },
+        }
+
+    response = client.post(
+        "/v1/source-searches",
+        headers=headers,
+        json={
+            "workspace_id": workspace.workspace_id,
+            "intent": "agent",
+            "source_ids": ["liepin", "company_01"],
+            "max_pages": 1,
+            "filters": {
+                "salary_min_k": 20,
+                "salary_max_k": 50,
+                "salary_mode": "overlap",
+                "unknown_policy": "include",
+            },
+            "browser_pages": {
+                "liepin": [
+                    {
+                        "records": [
+                            record("猎聘", "overlap", "样例一", "15-25K"),
+                            record("猎聘", "outside", "样例二", "10-15K"),
+                        ],
+                        "next_cursor": None,
+                    }
+                ],
+                "company_01": [
+                    {
+                        "records": [record("腾讯", "unknown", "样例三")],
+                        "next_cursor": None,
+                    }
+                ],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    jobs = response.json()["result_page"]["items"]
+    assert {item["job"]["company"] for item in jobs} == {"样例一", "样例三"}
 
 
 def test_refilter_restores_all_collected_candidates_without_network(tmp_path):
@@ -660,6 +806,37 @@ def test_public_page_bridge_caches_and_keeps_partial_on_failure(tmp_path):
         ).status_code
         == 409
     )
+
+
+def test_public_page_continuation_uses_returned_cursor(tmp_path):
+    calls = []
+
+    class Adapter:
+        def fetch_page(self, cursor):
+            calls.append(cursor)
+            return SourcePage(records=(), next_cursor="2" if cursor is None else None)
+
+    client = TestClient(
+        create_app(
+            token="test-secret",
+            database_path=tmp_path / "db",
+            source_adapter_factory_override=lambda *_: Adapter(),
+        )
+    )
+    headers = {"Authorization": "Bearer test-secret"}
+    endpoint = "/v1/sources/company_12/public-pages"
+    first = client.post(
+        endpoint, headers=headers, json={"keyword": "agent", "max_pages": 1}
+    )
+    assert first.status_code == 200
+    assert first.json()[0]["next_cursor"] == "2"
+    second = client.post(
+        endpoint,
+        headers=headers,
+        json={"keyword": "agent", "max_pages": 1, "cursor": "2"},
+    )
+    assert second.status_code == 200
+    assert calls == [None, "2"]
 
 
 def test_public_page_bridge_force_refresh_bypasses_success_cache(tmp_path):

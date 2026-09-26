@@ -16,7 +16,9 @@ export function ReputationEvidence({report,workspaceId,onReport,onSource}:{repor
   const [note,setNote]=useState("");
   const [busy,setBusy]=useState(false);
   const [message,setMessage]=useState("");
+  const [focusedEvidence,setFocusedEvidence]=useState<string>();
   const entries=report?.evidence||[];
+  const citationNumbers=new Map(entries.map((item,index)=>[item.evidence_id,index+1]));
   const topics=report?.job_context?.research_topics||[];
   const questionEntries=entries.filter(item=>item.context?.search_angle==="question");
   const verifiedQuestionCount=questionEntries.filter(item=>item.verification_status==="independently_retrieved").length;
@@ -34,14 +36,14 @@ export function ReputationEvidence({report,workspaceId,onReport,onSource}:{repor
     try{onReport(await window.jobfindsme!.correctResearch(report.report_id,{workspace_id:workspaceId,evidence_id:editing,kind,note}));setEditing(undefined);setNote("");setMessage("已在本机记录更正，原文仍保留。");}
     catch(error){setMessage(userError(error).message);}finally{setBusy(false);}
   }
-  function card(item:ResearchEvidence){
+  function card(item:ResearchEvidence,highlight?:string){
     const context=item.context||{};
     const publishedTime=item.published_at?Date.parse(item.published_at):NaN;
     const corrections=report?.corrections?.filter(c=>c.evidence_id===item.evidence_id)||[];
     const official=context.source_type==="official_disclosure";
     return <article className="evidence-card" key={item.evidence_id}>
       <div className="evidence-head"><strong>{item.platform}</strong><span>{official?"官方披露":context.source_type==="public_web"?"公开网页":"个人陈述"}{Number.isInteger(context.page)&&Number(context.page)>0?` · 第 ${context.page} 页`:""} · {Number.isFinite(publishedTime)?new Date(publishedTime).toLocaleDateString():"发布时间未知"}</span></div>
-      {item.excerpt&&<blockquote>{item.excerpt}</blockquote>}
+      {item.excerpt&&<details className="evidence-excerpt" open={!!highlight||item.excerpt.length<=240?true:undefined}><summary>{item.excerpt.length>240?"展开原文片段":"原文片段"}</summary><blockquote>{highlight&&item.excerpt.includes(highlight)?<>{item.excerpt.slice(0,item.excerpt.indexOf(highlight))}<mark>{highlight}</mark>{item.excerpt.slice(item.excerpt.indexOf(highlight)+highlight.length)}</>:item.excerpt}</blockquote></details>}
       <div className="evidence-source"><span>{item.verification_status==="independently_retrieved"?"已读取原页":"原页未核实"} · {item.relevance==="team"?"仅涉及所述团队":"团队范围未知"}</span>{item.url&&/^https?:\/\//i.test(item.url)&&(onSource?<button type="button" onClick={()=>onSource(item.url!)}>查看来源 ↗</button>:<a href={item.url} target="_blank" rel="noreferrer">查看来源 ↗</a>)}</div>
       <details><summary>来源范围与核验</summary><dl className="evidence-context"><dt>公司</dt><dd>{item.company||"未知"}</dd><dt>团队</dt><dd>{item.team||"未知"}</dd><dt>岗位 / 地区</dt><dd>{context.role||"未知"} / {context.region||"未知"}</dd><dt>读取时间</dt><dd>{item.retrieved_at||"未知"}</dd><dt>链接状态</dt><dd>{{reachable:"读取时可访问；当前未复查",broken:"已失效",unavailable:"暂无法读取",unknown:"未知"}[context.link_status||"unknown"]}</dd></dl><p className="note">{item.limitations}</p></details>
       {!!corrections.length&&<p className="note">本机更正：{corrections.map(c=>`${correctionKinds[c.kind]}${c.note?`：${c.note}`:""}`).join("；")}</p>}
@@ -51,28 +53,28 @@ export function ReputationEvidence({report,workspaceId,onReport,onSource}:{repor
   }
   if(agentClaims)return <div className="research-reading"><p className="research-overview">已保存 {entries.length} 条来源材料；陈述仍需核验来源与适用范围。</p>
     {!!report?.job_context?.interest_question&&<h2>{report.job_context.interest_question}</h2>}
-    <section className="research-reading-section"><h2>有依据的陈述</h2>{agentClaims.length?agentClaims.map((claim,index)=><article className="research-angle" key={index}><h3>{({business:"经营",listing:"上市",positive:"正面反馈",negative:"负面反馈",workload:"工作强度",benefits:"福利",role:"岗位职责",development:"发展"} as Record<string,string>)[claim.category]||"研究材料"}</h3><p>{claim.statement||claim.quote}</p><p className="note">{claim.support_level==="qualified"?"限定归纳 · 请对照原文":"原文直述"} · {claim.source_type==="official_disclosure"?"官方披露":claim.source_type==="public_web"?"公开网页":"个人陈述"} · 适用范围：{claim.scope}</p><blockquote>{claim.quote}</blockquote><small>证据 ID：{claim.evidence_ids.join("、")}</small>{claim.evidence_ids.map(id=>{const source=entries.find(item=>item.evidence_id===id);return source?<div key={id}>{card(source)}</div>:null;})}</article>):<p className="research-unknown">暂无能由原文直接支持的结论。</p>}{agentClaims.some(claim=>claim.category==="positive")&&agentClaims.some(claim=>claim.category==="negative")&&<p className="research-conflict">正面与负面陈述并存；它们可能涉及不同时间或团队，不能直接归纳为全公司的情况。</p>}</section>
+    <section className="research-reading-section"><h2>有依据的陈述</h2>{agentClaims.length?agentClaims.map((claim,index)=><article className="research-angle" key={index}><h3>{({business:"经营",listing:"上市",positive:"正面反馈",negative:"负面反馈",workload:"工作强度",benefits:"福利",role:"岗位职责",development:"发展"} as Record<string,string>)[claim.category]||"研究材料"}</h3><p>{claim.statement||claim.quote} {claim.evidence_ids.map(id=><button key={id} type="button" className="citation-button" onClick={()=>setFocusedEvidence(id)} aria-label={`查看引用 ${citationNumbers.get(id)||""}`}>[{citationNumbers.get(id)||"?"}]</button>)}</p><p className="note">{claim.support_level==="qualified"?"限定归纳 · 请对照原文":"原文直述"} · {claim.source_type==="official_disclosure"?"官方披露":claim.source_type==="public_web"?"公开网页":"个人陈述"} · 适用范围：{claim.scope}</p></article>):<p className="research-unknown">暂无能由原文直接支持的结论。</p>}{focusedEvidence&&(()=>{const source=entries.find(item=>item.evidence_id===focusedEvidence),claim=agentClaims.find(item=>item.evidence_ids.includes(focusedEvidence));return source?<div className="research-focused-evidence"><h3>引用 [{citationNumbers.get(focusedEvidence)}] 原文</h3>{card(source,claim?.quote)}</div>:null;})()}{agentClaims.some(claim=>claim.category==="positive")&&agentClaims.some(claim=>claim.category==="negative")&&<p className="research-conflict">正面与负面陈述并存；它们可能涉及不同时间或团队，不能直接归纳为全公司的情况。</p>}</section>
     {!!limitations.length&&<details className="research-diagnostics"><summary>限制与未知信息</summary><ul>{limitations.map((item,index)=><li key={index}>{item}</li>)}</ul></details>}
     {message&&<p role="status">{message}</p>}
   </div>;
   return <div className="research-reading">
     <p className="research-overview">{entries.length?`已保存 ${entries.length} 条可追溯材料；结论仍需结合来源和适用范围。`:
       "暂无可核对的公开原文，相关结论保持未知。"}</p>
-    {report?.job_context?.interest_question&&<section className="research-question-result" aria-label="本次问题的检索结果"><span className="research-eyebrow">本次问题</span><h2>{report.job_context.interest_question}</h2>{verifiedQuestionCount?<p>找到 {verifiedQuestionCount} 条相关原页陈述；团队与岗位适用性仍需核对。</p>:entries.length?<p>现有材料未直接回答这个问题。</p>:null}{questionEntries.map(card)}</section>}
+    {report?.job_context?.interest_question&&<section className="research-question-result" aria-label="本次问题的检索结果"><span className="research-eyebrow">本次问题</span><h2>{report.job_context.interest_question}</h2>{verifiedQuestionCount?<p>找到 {verifiedQuestionCount} 条相关原页陈述；团队与岗位适用性仍需核对。</p>:entries.length?<p>现有材料未直接回答这个问题。</p>:null}{questionEntries.map(item=>card(item))}</section>}
     {showCompanySection&&<section className="research-reading-section"><div className="research-section-heading"><span>01</span><h2>公司情况</h2></div>
       <p className="research-section-intro">经营与上市信息优先看公开披露；工作体验来自个人陈述，不能代表整个公司。</p>
-      {companyEntries.length?<div className="research-angles">{companyAngles.map(([angle,label])=>{const found=companyEntries.filter(item=>item.context?.search_angle===angle);return found.length?<section key={angle} className="research-angle"><h3>{label}</h3>{found.map(card)}</section>:null;})}</div>:<p className="research-unknown">现有材料未覆盖公司经营与员工体验。</p>}
+      {companyEntries.length?<div className="research-angles">{companyAngles.map(([angle,label])=>{const found=companyEntries.filter(item=>item.context?.search_angle===angle);return found.length?<section key={angle} className="research-angle"><h3>{label}</h3>{found.map(item=>card(item))}</section>:null;})}</div>:<p className="research-unknown">现有材料未覆盖公司经营与员工体验。</p>}
       {companyEntries.length>0&&(!companyEntries.some(item=>item.context?.search_angle==="business")||!companyEntries.some(item=>item.context?.search_angle==="listing"))&&<p className="research-unknown">{!companyEntries.some(item=>item.context?.search_angle==="business")?"经营情况未核实。":""} {!companyEntries.some(item=>item.context?.search_angle==="listing")?"上市状态未核实。":""}</p>}
       {hasPositive&&hasNegative&&<p className="research-conflict">正面与负面陈述并存；请结合发表时间、团队及岗位范围分别阅读。</p>}
     </section>}
     {topics.includes("job")&&<section className="research-reading-section"><div className="research-section-heading"><span>{showCompanySection?"02":"01"}</span><h2>岗位内容与发展</h2></div>
       <p className="research-section-intro">以下岗位信息来自保存时的 JD；发展判断另看公司的业务证据。</p>
       {report?.job_context?.description?<div className="research-jd-excerpt"><h3>岗位原文</h3><p>{report.job_context.description}</p></div>:<p className="research-unknown">缺少完整岗位 JD，职责与发展暂不能核对。</p>}
-      {jobAngles.map(([angle,label])=>{const found=jobEntries.filter(item=>item.context?.search_angle===angle);return found.length?<section className="research-angle" key={angle}><h3>{label}的公开材料</h3>{found.map(card)}</section>:null;})}
+      {jobAngles.map(([angle,label])=>{const found=jobEntries.filter(item=>item.context?.search_angle===angle);return found.length?<section className="research-angle" key={angle}><h3>{label}的公开材料</h3>{found.map(item=>card(item))}</section>:null;})}
       {!!report?.job_context?.description&&report?.job_context?.development_analysis?.status==="limited"&&<div className="research-analysis"><h3>发展线索 · 基于现有证据的分析</h3><p>{report.job_context.development_analysis.text}</p>{!!report.job_context.development_analysis.basis_evidence_ids?.length&&<small>依据：本页公司经营材料；未核实晋升路径。</small>}</div>}
       {!!report?.job_context?.description&&report?.job_context?.development_analysis?.status!=="limited"&&<p className="research-unknown">发展路径仍缺少可核对的公司经营依据。</p>}
     </section>}
-    {!!legacyEntries.length&&<section className="research-reading-section"><div className="research-section-heading"><span>旧</span><h2>历史材料</h2></div>{legacyEntries.map(card)}</section>}
+    {!!legacyEntries.length&&<section className="research-reading-section"><div className="research-section-heading"><span>旧</span><h2>历史材料</h2></div>{legacyEntries.map(item=>card(item))}</section>}
     {message&&<p role="status">{message}</p>}
     <details className="research-diagnostics"><summary>来源与说明</summary><p>{reputationDisclaimer}</p>{!!limitations.length&&<details className="research-limitations"><summary>{limitations.length} 条检索限制与未知信息</summary><ul>{limitations.map((item,index)=><li key={index}>{readableLimit(item)}</li>)}</ul></details>}{!topics.length&&!!report?.directions?.length&&<p>历史方向：{report.directions.map(key=>key==="salary"?"薪资（历史）":researchDirections[key]).join("、")}</p>}</details>
   </div>;

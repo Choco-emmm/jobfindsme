@@ -95,12 +95,13 @@ export class DesktopApiClient {
     });
   }
 
-  publicSourcePages(sourceId:string,input:{keyword:string;city:string;max_pages:number;seconds:number;force_refresh?:boolean},signal?:AbortSignal):Promise<BrowserSourcePage[]>{return this.json(`/v1/sources/${sourceId}/public-pages`,{method:'POST',body:JSON.stringify(input),signal},65000);}
+  publicSourcePages(sourceId:string,input:{keyword:string;city:string;max_pages:number;seconds:number;cursor?:string;force_refresh?:boolean},signal?:AbortSignal):Promise<BrowserSourcePage[]>{return this.json(`/v1/sources/${sourceId}/public-pages`,{method:'POST',body:JSON.stringify(input),signal},65000);}
 
   searchPreflight(input: SourceSearchExecutionInput): Promise<SourceSearchPreflight> {
+    const {boss_cursor:_boss,source_cursor:_source,client_run_id:_client,...request}=input;
     return this.json("/v1/search-preflight", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify(request),
     });
   }
 
@@ -345,7 +346,7 @@ export class DesktopApiClient {
   searchAgentSources(input:{workspace_id:string;company:string;original_question:string;search_query:string;site:string;timeout_ms?:number},signal?:AbortSignal,timeoutMs=8000):Promise<Array<{url:string;site:string;title:string;status:string}>> {
     return this.json("/v1/research-agent/search",{method:"POST",body:JSON.stringify(input),signal},timeoutMs);
   }
-  readAgentPage(input:{workspace_id:string;company:string;site:string;url:string;timeout_ms?:number},signal?:AbortSignal,timeoutMs=8000):Promise<import("../../shared/contracts").ResearchEvidence & {status:string}> {
+  readAgentPage(input:{workspace_id:string;company:string;site:string;url:string;question?:string;timeout_ms?:number},signal?:AbortSignal,timeoutMs=8000):Promise<import("../../shared/contracts").ResearchEvidence & {status:string}> {
     return this.json("/v1/research-agent/read-page",{method:"POST",body:JSON.stringify(input),signal},timeoutMs);
   }
   readAgentJob(workspaceId:string,jobId:string,signal?:AbortSignal,timeoutMs=8000):Promise<import("../../shared/contracts").SearchResultItem["job"]> {

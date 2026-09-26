@@ -162,6 +162,7 @@ class SearchPreflightRequest(StrictResponse):
     browser_errors: dict[str, str] = Field(default_factory=dict, max_length=20)
     page_size: int = 20
     resume_version_id: str | None = None
+    existing_run_id: str | None = None
 
 
 class PublicSourcePagesRequest(StrictResponse):
@@ -170,6 +171,7 @@ class PublicSourcePagesRequest(StrictResponse):
     max_pages: int = Field(default=2, ge=1, le=3)
     seconds: float = Field(default=15, ge=1, le=60)
     force_refresh: bool = False
+    cursor: str | None = Field(default=None, max_length=200)
 
 
 class SourceVerificationRequest(StrictResponse):
@@ -657,6 +659,7 @@ def create_app(
             request.city,
             request.max_pages,
             request.seconds,
+            request.cursor,
         )
         with public_pages_lock:
             cached = public_pages_cache.get(key)
@@ -670,7 +673,9 @@ def create_app(
             if failure and time.monotonic() - failure[0] < 300:
                 raise HTTPException(status_code=failure[1], detail=failure[2])
             adapter = source_adapter_factory(source_id, request.keyword, request.city)
-            pages, cursor, started = [], None, time.monotonic()
+            pages, cursor, started = [], request.cursor, time.monotonic()
+            failed_risk = False
+            failed = False
             try:
                 for _ in range(request.max_pages):
                     if pages and time.monotonic() - started > request.seconds:
@@ -707,18 +712,27 @@ def create_app(
                     )
                 )
                 code = 429 if risky else 502
+                failed = True
+                failed_risk = risky
                 public_pages_failures[source_id] = (time.monotonic(), code, message)
                 if not pages:
                     raise HTTPException(status_code=code, detail=message) from error
             if pages:
-                pages[-1]["next_cursor"] = None
+                if failed:
+                    pages[-1]["next_cursor"] = None
                 pages[-1]["collection"] = {
                     "batches": len(pages),
                     "elapsed_seconds": min(180, time.monotonic() - started),
-                    "stop_reason": "complete" if cursor is None else "page_budget",
-                    "cursor": None,
+                    "stop_reason": "risk_control"
+                    if failed_risk
+                    else "source_contract_error"
+                    if failed
+                    else "complete"
+                    if cursor is None
+                    else "page_budget",
+                    "cursor": None if failed else cursor,
                     "complete": cursor is None,
-                    "failure": None,
+                    "failure": "risk_control" if failed_risk else None,
                 }
             public_pages_cache[key] = (time.monotonic(), pages)
             if len(public_pages_cache) > 40:
@@ -941,15 +955,25 @@ def create_app(
                 ),
                 None,
             )
-            run_id = desktop_jobs.create_snapshot(
-                workspace_id=request.workspace_id,
-                intent=request.intent.strip() or preflight.keywords[0],
-                job_ids=snapshot_job_ids,
-                resume_version=current_resume,
-                filters=filters,
-                weights=request.weights,
-                rule_version_id=request.rule_version_id,
-            )
+            if request.existing_run_id:
+                run_id = desktop_jobs.append_snapshot(
+                    workspace_id=request.workspace_id,
+                    run_id=request.existing_run_id,
+                    job_ids=snapshot_job_ids,
+                    resume_version=current_resume,
+                    expected_intent=request.intent.strip() or preflight.keywords[0],
+                    expected_filters=filters,
+                )
+            else:
+                run_id = desktop_jobs.create_snapshot(
+                    workspace_id=request.workspace_id,
+                    intent=request.intent.strip() or preflight.keywords[0],
+                    job_ids=snapshot_job_ids,
+                    resume_version=current_resume,
+                    filters=filters,
+                    weights=request.weights,
+                    rule_version_id=request.rule_version_id,
+                )
             result_page = desktop_jobs.page(
                 workspace_id=request.workspace_id,
                 run_id=run_id,
@@ -958,6 +982,10 @@ def create_app(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except LookupError as error:
+            raise HTTPException(
+                status_code=404, detail="search run not found"
+            ) from error
         return SourceSearchResponse(
             **_preflight_payload(preflight).model_dump(),
             jobs=jobs,
@@ -1932,7 +1960,10 @@ def create_app(
             timeout_ms = request.get("timeout_ms")
             if timeout_ms is None:
                 return read_original_page(
-                    str(request["url"]), str(request["company"]), str(request["site"])
+                    str(request["url"]),
+                    str(request["company"]),
+                    str(request["site"]),
+                    question=str(request.get("question") or "")[:700],
                 )
             if (
                 not isinstance(timeout_ms, (int, float))
@@ -1944,6 +1975,7 @@ def create_app(
                 str(request["url"]),
                 str(request["company"]),
                 str(request["site"]),
+                question=str(request.get("question") or "")[:700],
                 timeout=timeout_ms / 1000,
             )
         except (KeyError, ValueError, LookupError) as error:

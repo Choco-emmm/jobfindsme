@@ -240,6 +240,11 @@ def build_search_keywords(*, intent: str, resume) -> tuple[str, ...]:
             raise SearchPreflightError("enter a job keyword or confirm a resume first")
         return (clean_intent,)
 
+    # A typed role is the remote query. Resume facts are private matching input,
+    # not extra requirements silently added to a recruitment site's search box.
+    if clean_intent:
+        return (clean_intent,)
+
     terms: list[str] = []
     for value in resume.content.get("skills", ()):
         safe = create_analysis_copy(
@@ -257,19 +262,12 @@ def build_search_keywords(*, intent: str, resume) -> tuple[str, ...]:
                 text=value,
             ).text
             terms.extend(_TECH_TERM.findall(safe))
-    unique_terms = tuple(dict.fromkeys(terms))[:6]
-    if not clean_intent:
-        if not unique_terms:
-            raise SearchPreflightError(
-                "confirmed resume has no usable skill or experience keywords"
-            )
-        return tuple(dict.fromkeys((" ".join(unique_terms[:2]), *unique_terms[:3])))[:4]
-    queries = [
-        " ".join((clean_intent, *unique_terms[:2])),
-        clean_intent,
-    ]
-    queries.extend(f"{clean_intent} {term}" for term in unique_terms[2:3])
-    return tuple(dict.fromkeys(queries))
+    unique_terms = tuple(dict.fromkeys(terms))[:1]
+    if not unique_terms:
+        raise SearchPreflightError(
+            "confirmed resume has no usable skill or experience keywords"
+        )
+    return unique_terms
 
 
 def connector_adapter_for(*, source_id: str, keyword: str, city: str):

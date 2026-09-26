@@ -8,5 +8,32 @@ test('first valid page remains when second Electron source page fails',async()=>
  const failures=[];const client={recordSourceRuntimeFailure:async(...args)=>failures.push(args)};
  const result=await collectBrowserSourcePages({source_ids:['zhilian'],workspace_id:'w1',intent:'Python'}, {allowed_source_ids:['zhilian'],keywords:['Python'],max_pages:3,time_budget_seconds:10}, {client,manager,isCancelled:()=>false});
  assert.equal(calls,2);assert.equal(result.pages.zhilian.length,1);assert.equal(result.pages.zhilian[0].records[0].external_id,'one');
- assert.match(result.errors.zhilian,/risk_control/);assert.deepEqual(failures[0].slice(0,2),['zhilian','risk_control']);
+ assert.match(result.errors.zhilian,/risk_control/);assert.equal(failures.length,0);
+});
+
+test('fast source is committed while the second source is still loading',async()=>{
+ let releaseSlow;const slow=new Promise(resolve=>{releaseSlow=resolve;});
+ const committed=[];let cursorSeen;
+ const manager={searchPage:async(sourceId,input)=>{
+   if(sourceId==='wuyou')await slow;
+   if(sourceId==='zhilian')cursorSeen=input.page;
+   return {records:[{external_id:sourceId,source_name:sourceId,source_url:'https://example.com',payload:{title:'Python'}}],next_cursor:null};
+ }};
+ const run=collectBrowserSourcePages({source_ids:['zhilian','wuyou'],workspace_id:'w1',intent:'Python',source_cursor:'3'},
+   {allowed_source_ids:['zhilian','wuyou'],keywords:['Python'],max_pages:1,time_budget_seconds:10},
+   {client:{},manager,isCancelled:()=>false,onSourceCompleted:async id=>{committed.push(id);}});
+ await new Promise(resolve=>setTimeout(resolve,15));
+ assert.deepEqual(committed,['zhilian']);
+ assert.equal(cursorSeen,3);
+ releaseSlow();await run;
+ assert.deepEqual(committed,['zhilian','wuyou']);
+});
+
+test('Alibaba uses its existing browser collector without a known unsupported local adapter call',async()=>{
+ let publicCalls=0,careerCalls=0;
+ const result=await collectBrowserSourcePages({source_ids:['company_03'],workspace_id:'w1',intent:'AI Infra'},
+   {allowed_source_ids:['company_03'],keywords:['AI Infra'],max_pages:1,time_budget_seconds:10},
+   {client:{publicSourcePages:async()=>{publicCalls++;throw Error('no_public_adapter');}},
+    manager:{collectCareer:async()=>{careerCalls++;return {records:[],next_cursor:null};}},isCancelled:()=>false});
+ assert.equal(publicCalls,0);assert.equal(careerCalls,1);assert.equal(result.pages.company_03.length,1);
 });

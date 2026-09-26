@@ -121,9 +121,12 @@ export type SourceBrowserTab = {id:string;sourceId:string;url:string;title:strin
 export type SourceBrowserState = {fitting?:boolean;url:string;canGoBack:boolean;canGoForward:boolean;loading:boolean;activeTabId:string|null;tabs:SourceBrowserTab[];notice:string;zoom:number};
 export type SourceBrowserBounds = { x: number; y: number; width: number; height: number };
 
-export type SourceCollectionProgress = {stage:"queued"|"loading"|"listing"|"details"|"cached"|"done";count:number;message:string;titles?:string[]};
+export type SourceCollectionProgress = {stage:"queued"|"loading"|"listing"|"details"|"cached"|"done";count:number;message:string;titles?:string[];workspace_id?:string;client_run_id?:string;run_id?:string;source_id?:string;batch_id?:string;response?:SourceSearchResponse};
 export type SourceSearchInput = {
   boss_cursor?:string;
+  source_cursor?:string;
+  client_run_id?:string;
+  existing_run_id?:string;
   workspace_id: string;
   intent: string;
   source_ids: string[];
@@ -190,6 +193,7 @@ export type SearchResultItem = {
   job: {
     job_id: string; title: string; company: string; description: string;
     locations: string[]; salary_min_k: number | null; salary_max_k: number | null;
+    salary?:{raw_text:string;period:"month"|"year"|"day"|"hour"|"unknown";currency?:string|null;months_per_year?:number|null}|null;
     experience_min_years: number | null; experience_max_years: number | null;
     recruitment_track: string; employment_type: string; apply_url: string;
     source: { source_name: string; liveness: string; detail_level?:string; published_at?:string|null };
@@ -198,6 +202,7 @@ export type SearchResultItem = {
   local_score?:number;
   score: number|null;
   snapshot_status?:"exact"|"unknown";
+  score_basis_outdated?:boolean;
   components: Record<string, number>;
   details?: ScoreDetails;
   scoring_version?: string;
@@ -230,7 +235,10 @@ export type SourceSearchRun = {
 };
 
 export type SourceSearchResponse = {
-  source_diagnostics?: {started_at:string;first_source_ms:number|null;sources:Record<string,{elapsed_ms:number;records:number;site_pages:number;read_at:string;status:string}>};
+  planned_queries?:Array<{source_id:string;keyword:string;city:string}>;
+  executed_queries?:Array<{source_id:string;keyword:string;city:string}>;
+  local_filters?:SearchFilters;
+  source_diagnostics?: {started_at:string;first_source_ms:number|null;first_usable_ms?:number|null;sources:Record<string,{elapsed_ms:number;records:number;site_pages:number;read_at:string;status:string}>};
   workspace_id: string;
   resume_version_id: string | null;
   keywords: string[];
@@ -372,10 +380,10 @@ export type PromptTurnInput = {
 
 export type ModelProtocol = "openai_compatible" | "anthropic" | "gemini";
 
-export type ResearchChatTurn = {role:"user"|"assistant";text:string;reportId?:string;searchQuery?:string};
+export type ResearchChatTurn = {role:"user"|"assistant";text:string;reportId?:string;searchQuery?:string;evidence?:ResearchEvidence[]};
 export type ResearchChatInput = {request_id:string;session_id:string;workspace_id:string;connection_id:string;question:string;research:boolean;job_id?:string;company?:string;title?:string;history:ResearchChatTurn[]};
 export type ResearchChatDelta = {request_id:string;session_id:string;workspace_id:string;delta:string};
-export type ResearchChatResult = {text:string;report?:ResearchReport;company?:string;researched?:boolean};
+export type ResearchChatResult = {text:string;report?:ResearchReport;company?:string;researched?:boolean;evidence?:ResearchEvidence[]};
 
 export type ModelConnectionInput = {
   connection_id?: string;
@@ -406,7 +414,7 @@ export type ServiceStatus = {
 export type ResearchDirection = "role" | "workload" | "salary" | "leave" | "care";
 export type ResearchCorrectionInput = {workspace_id:string;evidence_id:string;kind:"wrong_entity"|"broken_link"|"wrong_team"|"other";note:string};
 export type ResearchEvidence = {
-  context?: {link_status?:"reachable"|"broken"|"unavailable"|"unknown";role?:string|null;level?:string|null;region?:string|null;company_match?:string;research_topic?:"company"|"job"|null;search_angle?:"business"|"listing"|"positive"|"negative"|"workload"|"benefits"|"role"|"development"|"question"|null;source_type?:"official_disclosure"|"personal_account"|"public_web";content_type?:string;page?:number|null};
+  context?: {link_status?:"reachable"|"broken"|"unavailable"|"unknown";role?:string|null;level?:string|null;region?:string|null;company_match?:string;research_topic?:"company"|"job"|null;search_angle?:"business"|"listing"|"positive"|"negative"|"workload"|"benefits"|"role"|"development"|"question"|null;source_type?:"official_disclosure"|"personal_account"|"public_web";content_type?:string;page?:number|null;start_char?:number;end_char?:number;passage_id?:string;source_id?:string};
   evidence_id: string;
   url: string | null;
   platform: string;
