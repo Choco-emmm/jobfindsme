@@ -43,7 +43,7 @@ export const sourceBrowserSpecs: Record<SourceBrowserId, {
     partition: "persist:jobfindsme-source-company-01",
   },
   company_02: {loginUrl:"https://jobs.bytedance.com/", allowedHosts:["jobs.bytedance.com", "seed.bytedance.com"], partition:"persist:jobfindsme-source-company-02"},
-  company_03: {loginUrl:"https://talent-holding.alibaba.com/?lang=zh", allowedHosts:["talent.alibaba.com", "campus-talent.alibaba.com", "talent-holding.alibaba.com"], partition:"persist:jobfindsme-source-company-03"},
+  company_03: {loginUrl:"https://talent-holding.alibaba.com/off-campus/position-list?lang=zh", allowedHosts:["talent.alibaba.com", "campus-talent.alibaba.com", "talent-holding.alibaba.com"], partition:"persist:jobfindsme-source-company-03"},
   company_04: {loginUrl:"https://career.meituan.com/", allowedHosts:["career.meituan.com"], partition:"persist:jobfindsme-source-company-04"},
   company_05: {loginUrl:"https://talent.baidu.com/", allowedHosts:["talent.baidu.com"], partition:"persist:jobfindsme-source-company-05"},
   company_06: {loginUrl:"https://zhaopin.jd.com/home", allowedHosts:["zhaopin.jd.com"], partition:"persist:jobfindsme-source-company-06"},

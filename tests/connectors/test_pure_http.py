@@ -146,6 +146,19 @@ def test_liepin_happy_path_parses_cards() -> None:
     assert body["key"] == "Python"
 
 
+def test_liepin_unknown_city_does_not_silently_search_everywhere() -> None:
+    session = FakeSession()
+    with pytest.raises(ValueError, match="unsupported_city"):
+        LiepinPureHttpConnector(
+            "Python",
+            city="未核验城市",
+            policy=_policy(),
+            session_factory=lambda: session,
+        ).fetch()
+    assert not session.get_urls
+    assert not session.post_calls
+
+
 def test_liepin_without_xsrf_cookie_is_blocked() -> None:
     session = FakeSession(get_responses=[FakeResponse(text="landing")])
     with pytest.raises(PureHttpBlockedError):

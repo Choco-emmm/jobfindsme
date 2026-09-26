@@ -11,7 +11,7 @@ function readCareerPage():CareerPage {
  const text=(e:Element|null)=>((e as HTMLElement)?.innerText||e?.textContent||'').trim();
  const pick=(e:Element,s:string)=>Array.from(e.querySelectorAll(s)).filter(visible).map(text).find(Boolean)||'';
  const body=(document.body?.innerText||'').slice(0,20000);
- const blocked=['访问过于频繁','请完成验证','滑动验证','安全验证','Access Denied'].find(s=>body.includes(s));
+ const blocked=['访问过于频繁','请完成验证','滑动验证','安全验证','Access Denied','请先登录','登录后查看'].find(s=>body.includes(s));
  const jobs:CareerPage['jobs']=[],seen=new Set<string>();
  // JD's public home_index.js binds observed requirement IDs to this exact detail route.
  if(location.hostname==='zhaopin.jd.com')for(const row of Array.from(document.querySelectorAll('.table-main .line')).filter(visible)){
@@ -22,7 +22,7 @@ function readCareerPage():CareerPage {
  }
  for(const a of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(visible)){
   const u=new URL(a.href,location.href);
-  if(!/(?:\/job(?:s)?\/[^/?#]+|\/position\/\w+\/detail|\/job_detail\/|\/jobdesc|#\/job\/|\/jobs\/detail\?|postId=|jobId=)/i.test(u.href))continue;
+  if(!/(?:\/job(?:s)?\/[^/?#]+|\/position\/\w+\/detail|\/position-detail\?[^#]*\bpositionId=\d+|\/job_detail\/|\/jobdesc|#\/job\/|\/jobs\/detail\?|postId=|jobId=)/i.test(u.href))continue;
   if(/\/jobs\/(?:social|campus|social-list|campus-list|search|index|list)(?:[/?#]|$)/i.test(u.href)||/\/job\/job_info_list\//.test(u.href))continue;
   if(a.closest('[class*="latest-job"]'))continue;
   const card=a.closest('li,article,[class*="job-card"],[class*="position-item"],[class*="job-item"]')||a;
@@ -58,17 +58,27 @@ async function setCareerKeyword(keyword:string):Promise<boolean>{
 export function careerRecords(sourceId:SourceBrowserId,url:string,raw:CareerPage,keyword:string,city:string):SourceActionPage {
  const seen=new Set<string>();
  raw={...raw,jobs:raw.jobs.map(job=>({...job,url:canonicalJobUrl(job.url)}))};
- const records=raw.jobs.filter(j=>isAllowedSourceUrl(sourceId,j.url)&&!seen.has(j.url)&&!!seen.add(j.url)).filter(j=>!keyword||j.title.toLowerCase().includes(keyword.toLowerCase())).filter(j=>!city||!j.location||j.location.includes(city)).map(j=>({external_id:j.url,source_name:browserSiteNames[sourceId],source_url:url,payload:{title:j.title,company:j.company||browserSiteNames[sourceId],location:j.location,salary:j.salary,description:j.description||j.title,url:j.url,apply_url:j.url,detail_level:j.description&&j.description.length>=80?'detail_page':'list_card'}}));
+ const records=raw.jobs.filter(j=>isAllowedSourceUrl(sourceId,j.url)&&!seen.has(j.url)&&!!seen.add(j.url)).filter(j=>!keyword||j.title.toLowerCase().includes(keyword.toLowerCase())).filter(j=>!city||!!j.location&&j.location.includes(city)).map(j=>({external_id:j.url,source_name:browserSiteNames[sourceId],source_url:url,payload:{title:j.title,company:j.company||browserSiteNames[sourceId],location:j.location,salary:j.salary,description:j.description||j.title,url:j.url,apply_url:j.url,detail_level:j.description&&j.description.length>=80?'detail_page':'list_card'}}));
  return {records,next_cursor:null};
 }
 
 // Observed click-only list titles, scoped per first-party site. No application buttons.
 export function careerClickableScript(sourceId:SourceBrowserId,index=-1):string {
- const selectors:Partial<Record<SourceBrowserId,string>>={company_03:'._1RRlPtjyYmeDGCWt9lrk2P',company_04:'.position_list_item .postion_name .title',company_05:'[class*="post-title-content__"]',company_06:'a.link-tag[id]',company_07:'.list-card-content .f-title',company_08:'.item .name[title]',company_10:'.cursor-pointer.break-all'};
+ if(sourceId==='company_03')return `(${alibabaClickablePage.toString()})(${index})`;
+ const selectors:Partial<Record<SourceBrowserId,string>>={company_04:'.position_list_item .postion_name .title',company_05:'[class*="post-title-content__"]',company_06:'a.link-tag[id]',company_07:'.list-card-content .f-title',company_08:'.item .name[title]',company_10:'.cursor-pointer.break-all'};
  const selector=selectors[sourceId];if(!selector)return '[]';
  return `(()=>{const nodes=Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(e=>e.getBoundingClientRect().width>0);if(${index}>=0){nodes[${index}]?.click();return [];}return nodes.slice(0,40).map(e=>({title:(e.getAttribute('title')||e.innerText||'').trim(),location:(e.closest('.position_list_item')?.querySelector('.position_city')?.textContent||'').trim()}));})()`;
 }
+function alibabaClickablePage(index:number):Array<{title:string;location:string}> {
+ const visible=(element:HTMLElement)=>{const bounds=element.getBoundingClientRect();return bounds.width>0&&bounds.height>0;};
+ const text=(element:HTMLElement)=>(element.innerText||'').trim();
+ const cards=Array.from(document.querySelectorAll<HTMLElement>('article,li,div')).filter(visible)
+  .filter(element=>getComputedStyle(element).cursor==='pointer'&&/更新于|Updated On/i.test(text(element))&&text(element).length<600)
+  .filter(element=>!Array.from(element.children).some(child=>child instanceof HTMLElement&&getComputedStyle(child).cursor==='pointer'&&/更新于|Updated On/i.test(text(child))));
+ if(index>=0){cards[index]?.click();return [];}
+ return cards.slice(0,40).map(element=>({title:text(element).split('\n')[0].trim(),location:text(element)})).filter(item=>!!item.title);
+}
 export function careerEntryClickScript(sourceId:SourceBrowserId):string {
- if(!['company_01','company_03'].includes(sourceId))return 'false';
- return `(()=>{const nodes=Array.from(document.querySelectorAll('a,button,span,div')).filter(e=>e.getBoundingClientRect().width>0&&(e.innerText||'').trim()==='社会招聘');const n=nodes.sort((a,b)=>a.querySelectorAll('*').length-b.querySelectorAll('*').length)[0];n?.click();if(location.hostname==='talent-holding.alibaba.com'){const all=Array.from(document.querySelectorAll('div,button,a')).filter(e=>e.getBoundingClientRect().width>0&&(e.innerText||'').trim()==='查看全部职位').sort((a,b)=>a.querySelectorAll('*').length-b.querySelectorAll('*').length)[0];all?.click();}return !!n;})()`;
+ if(sourceId!=='company_01')return 'false';
+ return `(()=>{const nodes=Array.from(document.querySelectorAll('a,button,span,div')).filter(e=>e.getBoundingClientRect().width>0&&(e.innerText||'').trim()==='社会招聘');const n=nodes.sort((a,b)=>a.querySelectorAll('*').length-b.querySelectorAll('*').length)[0];n?.click();return !!n;})()`;
 }

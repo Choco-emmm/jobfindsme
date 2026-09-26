@@ -334,14 +334,9 @@ export class SourceBrowserManager {
         if(!isAllowedSourceUrl(sourceId,raw.entry)||raw.entry===view.webContents.getURL())break;
         check();const entry=raw.entry;try{await bounded(view.webContents.loadURL(entry));}catch(error){if(!await confirmAllowedNavigationAfterAbort(sourceId,entry,error,()=>({url:view.webContents.getURL(),loading:view.webContents.isLoadingMainFrame()})))throw error;}raw=await bounded(view.webContents.executeJavaScript(careerPageScript()));
       }
-      if(!raw.jobs.length&&['company_01','company_03'].includes(sourceId)){
+      if(!raw.jobs.length&&sourceId==='company_01'){
         await bounded(view.webContents.executeJavaScript(careerEntryClickScript(sourceId)));
         await new Promise(r=>setTimeout(r,700));
-        if(sourceId==='company_03'){
-          let entryPopup='';view.webContents.setWindowOpenHandler(({url})=>{if(isAllowedSourceUrl(sourceId,url))entryPopup=url;return {action:'deny'};});
-          try{await bounded(view.webContents.executeJavaScript(careerEntryClickScript(sourceId)));await new Promise(r=>setTimeout(r,700));if(entryPopup)await bounded(view.webContents.loadURL(entryPopup));}
-          finally{view.webContents.setWindowOpenHandler(()=>({action:'deny'}));}
-        }
       }
       let searchPopup='',keywordApplied=false;
       view.webContents.setWindowOpenHandler(({url})=>{if(isAllowedSourceUrl(sourceId,url))searchPopup=url;return {action:'deny'};});
@@ -353,7 +348,7 @@ export class SourceBrowserManager {
       for(let page=0;page<Math.min(input.maxPages,3);page++){
         for(let wait=0;wait<24;wait++){check();raw=await bounded(view.webContents.executeJavaScript(careerPageScript()));if(raw.blocked||(!raw.loading&&((raw.empty&&wait>=12)||(raw.jobs.length&&pageIdentity(raw)!==previousPage))))break;await new Promise(r=>setTimeout(r,250));}
         if(raw.loading)throw Error('source_loading:岗位列表未完成加载');
-        if(raw.blocked){this.careerBlocked.set(sourceId,Date.now()+300000);throw Error('risk_control:'+raw.blocked);}
+        if(raw.blocked){if(/登录/.test(raw.blocked))throw Error('login_required:'+raw.blocked);this.careerBlocked.set(sourceId,Date.now()+300000);throw Error('risk_control:'+raw.blocked);}
         if(!raw.jobs.length&&!keywordApplied&&!careerClickableScript(sourceId).includes('querySelectorAll'))throw Error('source_contract_error:官网尚未暴露可验证的岗位检索控件');
         if(!raw.jobs.length){
           const candidates=await bounded(view.webContents.executeJavaScript(careerClickableScript(sourceId))) as Array<{title:string;location:string}>;

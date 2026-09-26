@@ -101,6 +101,8 @@ class LiepinPureHttpConnector:
         if not 0 <= current_page <= 200:
             raise ValueError("liepin page must be between 0 and 200")
         dq = LIEPIN_CITY_CODES.get(self.city, "")
+        if self.city and not dq:
+            raise ValueError(f"unsupported_city:猎聘尚未核验城市「{self.city}」编码")
         search_url = f"https://www.liepin.com/zhaopin/?key={quote(self.keyword)}"
         if dq:
             search_url += f"&dqs={dq}"
