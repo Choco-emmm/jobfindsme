@@ -92,12 +92,15 @@ export function explainResearchGap(originals:number,actions:Array<Record<string,
   const searchReason=actions.find(item=>item.tool==="search_web"&&typeof item.reason_code==="string")?.reason_code;
   const limited=actions.some(item=>item.status==="rate_limited"||item.status==="restricted");
   const readFailed=actions.some(item=>(item.tool==="read_page"||item.tool==="read_browser_page")&&(item.status==="read_failed"||item.status==="restricted"));
+  const readServerError=actions.find(item=>item.tool==="read_page"&&item.status==="read_failed"&&typeof item.http_status==="number"&&item.http_status>=500&&item.http_status<=599)?.http_status;
   const noTextLayer=actions.some(item=>item.tool==="read_page"&&item.status==="no_text_layer");
   const entityMismatch=actions.some(item=>(item.tool==="read_page"||item.tool==="read_browser_page")&&item.status==="entity_mismatch");
   const reason=originals>0
     ?`这次读取了 ${originals} 条来源材料，但没有足够依据回答这个问题。`
-    :limited?"这次来源要求验证或触发限流，已停止继续读取该来源，没拿到可引用的原文。"
+    :limited&&entityMismatch?"候选原页中有与公司主体不符的内容，另有来源要求验证或触发限流；本次没有取得可引用的相关原文。"
+      :limited?"一个候选来源要求验证或触发限流，已停止读取该来源；本次没有取得可引用的原文。"
       :noTextLayer?"这次 PDF 没有可提取的文字层，无法核对内容或引用。"
+      :readServerError?`一个候选原页服务返回 HTTP ${readServerError}，没拿到可引用的原文；这不表示公司没有公开资料。`
       :readFailed?"这次发现或取得了来源地址，但原页读取失败，没拿到可引用的原文。"
       :entityMismatch?"这次读到了候选原页，但没能核对提问中的公司主体，不能引用。"
       :searchError?`这次公开检索服务未能完成${searchReason==="redirect_blocked"?"（跳转被安全策略拦截）":searchReason==="tls_error"?"（TLS 证书校验失败）":searchReason==="connection_failed"?"（连接失败）":searchReason==="invalid_response"?"（响应无法解析）":""}，不能把它当作没有结果。`
@@ -177,7 +180,8 @@ export async function runPiResearchAgent(context:AgentResearchContext,connection
         actions.push({tool:"search_web",site:p.site,provider:fresh[0]?.provider||"bing_rss",search_query:searchQuery,count:fresh.length,duplicates:rows.length-fresh.length,status:fresh.length?"candidates":rows.length?"no_new_information":"no_results"});
         await persist();return result({candidates:fresh,research_progress:{new_urls:fresh.length,no_new_searches:noNewSearches,searches_remaining:budget.searches-searches}});
       }catch(error){
-        guard();searchErrors++;searchProviderHalted=true;const errorText=String(error);const limited=/429|403|captcha|rate.?limit|验证码|风控/iu.test(errorText);
+        guard();searchErrors++;searchProviderHalted=true;const errorText=String(error);
+        const limited=/(?:\bHTTP\s*(?:403|429)\b|\b(?:403\s+Forbidden|429\s+Too\s+Many\s+Requests)\b|captcha|rate.?limit|验证码|风控)/iu.test(errorText);
         const reason_code=/跳转被安全策略拦截/u.test(errorText)?"redirect_blocked":/TLS 证书/u.test(errorText)?"tls_error":/连接失败|响应超时/u.test(errorText)?"connection_failed":/无法解析/u.test(errorText)?"invalid_response":limited?"rate_limited":"service_error";
         actions.push({tool:"search_web",site:p.site,provider:"public_discovery",search_query:searchQuery,status:limited?"rate_limited":"search_service_error",reason_code});
         failures.push(`public discovery: ${String(error).slice(0,120)}`);await persist();
@@ -207,7 +211,10 @@ export async function runPiResearchAgent(context:AgentResearchContext,connection
         }else if(row.status==="restricted"||row.status==="rate_limited"){
           readFailures++;haltedHosts.add(host);
         }else if(row.status==="entity_mismatch")entityMismatches++;
-        actions.push({tool:"read_page",site:p.site,host,url,origin:knownUrls.has(url)?"known_url":"search",status:actionStatus});
+        const limit=(row as {limit?:unknown}).limit;
+        const httpStatus=typeof limit==="string"?Number(/^HTTP (\d{3})$/.exec(limit)?.[1]):NaN;
+        actions.push({tool:"read_page",site:p.site,host,url,origin:knownUrls.has(url)?"known_url":"search",status:actionStatus,
+          ...(Number.isInteger(httpStatus)?{http_status:httpStatus}:{})});
         await persist();return result(selected||row);
       }catch(error){
         guard();readFailures++;if(p.site!=="web")failedReads.add(url);

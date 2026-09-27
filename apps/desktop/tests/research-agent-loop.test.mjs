@@ -242,12 +242,24 @@ test('no-evidence answer states what was attempted and offers a next step',()=>{
  assert.match(explainResearchGap(0,[{tool:'search_web'},{tool:'read_page',status:'read_failed'}],['read failed']),/原页读取失败/);
  assert.match(explainResearchGap(0,[{tool:'search_web',status:'search_service_error'}],['outage']),/检索服务未能完成/);
  assert.match(explainResearchGap(0,[{tool:'search_web',status:'search_service_error',reason_code:'redirect_blocked'}],[]),/跳转被安全策略拦截/);
+ assert.match(explainResearchGap(0,[{tool:'search_web',status:'candidates'},{tool:'read_page',status:'read_failed',http_status:503}],[]),/HTTP 503/);
+ const mixed=explainResearchGap(0,[{tool:'search_web',status:'candidates'},{tool:'read_page',status:'restricted'},{tool:'read_page',status:'entity_mismatch'}],[],'查找星宇股份，看看怎么样');
+ assert.match(mixed,/主体不符/);assert.match(mixed,/部分|另有/);assert.doesNotMatch(mixed,/这次来源要求验证或触发限流/);
  assert.match(explainResearchGap(0,[{tool:'search_web'},{tool:'read_page',status:'entity_mismatch'}],[]),/主体/);
  assert.match(explainResearchGap(0,[{tool:'find_evidence'},{tool:'read_page',status:'no_text_layer'}],[]),/没有可提取的文字层/);
  assert.match(explainResearchGap(1,[{tool:'find_evidence'}],[]),/不足以支持|没有足够依据/);
  assert.match(explainResearchGap(0,[],[],'想找工作'),/找工作/);
  const businessGap=explainResearchGap(0,[{tool:'search_web',status:'no_results'}],[],'腾讯经营与披露情况');
  assert.match(businessGap,/财报年份或报告期/);assert.doesNotMatch(businessGap,/找工作/);
+});
+
+test('a connection port ending in 403 is a service failure, not source restriction',async()=>{
+ let turn=0;const server=http.createServer((_request,response)=>{response.writeHead(200,{'Content-Type':'text/event-stream'});turn++;const next=turn===1?tool('find_evidence',{},turn):turn===2?tool('search_web',{site:'web',question:'示例公司'},turn):{role:'assistant',content:JSON.stringify({claims:[]})};sse(response,next,next.tool_calls?'tool_calls':'stop');});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const executions=[];const tools={findEvidence:async()=>[],searchWeb:async()=>{throw Error('connect ECONNREFUSED 127.0.0.1:1403');},readPage:async()=>{throw Error('unexpected read');},readJob:async()=>null,readBrowserPage:async()=>{throw Error('unexpected browser read');},saveExecution:async state=>executions.push(state),saveReport:async()=>null};
+ try{const result=await runPiResearchAgent({workspaceId:'w1',requestId:'req_port_1403',question:'示例公司怎么样',company:'示例公司',history:[],research:true},{protocol:'openai',provider:'openai',endpoint:`http://127.0.0.1:${server.address().port}/v1`,model_id:'mock',status:'verified',auth_mode:'none'},'',tools,()=>{},new AbortController().signal);
+  assert.equal(executions.at(-1).actions.find(item=>item.tool==='search_web')?.status,'search_service_error');assert.match(result.text,/检索服务未能完成/);
+ }finally{server.close();}
 });
 
 test('official index candidate from hkex search is read as official web original',async()=>{

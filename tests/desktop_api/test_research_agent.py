@@ -1,4 +1,5 @@
 import json
+import urllib.parse
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -679,6 +680,40 @@ def test_rate_limit_has_distinct_read_status(monkeypatch):
     assert result["status"] == "rate_limited"
 
 
+@pytest.mark.parametrize(
+    ("http_code", "expected"),
+    [
+        (401, "restricted"),
+        (403, "restricted"),
+        (500, "read_failed"),
+        (502, "read_failed"),
+        (503, "read_failed"),
+    ],
+)
+def test_original_http_failure_does_not_call_server_outage_a_restriction(
+    monkeypatch, http_code, expected
+):
+    import urllib.error
+
+    monkeypatch.setattr(
+        agent_sources, "validate_public_http_url", lambda *_args, **_kwargs: None
+    )
+
+    def reject(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://www.zhihu.com/p/1", http_code, "fixture", {}, None
+        )
+
+    result = agent_sources.read_original_page(
+        "https://www.zhihu.com/p/1",
+        "示例公司",
+        "zhihu",
+        opener=SimpleNamespace(open=reject),
+    )
+    assert result["status"] == expected
+    assert result["limit"] == f"HTTP {http_code}"
+
+
 def test_old_job_evidence_is_not_reused_as_current_listing():
     from jobfindsme.research.agent_store import _fresh
 
@@ -1259,6 +1294,88 @@ def test_company_research_http_flow_saves_answer_and_reopens(tmp_path, monkeypat
     )
 
 
+def test_unrelated_rss_hits_trigger_one_short_exact_company_query(monkeypatch):
+    calls = []
+    monkeypatch.setattr(agent_sources, "validate_public_http_url", lambda *a, **k: None)
+    monkeypatch.setattr(agent_sources, "_source_url", lambda url, site: url)
+    bodies = [
+        "<rss><channel><item><link>https://baike.baidu.com/item/star</link><title>星：天文学与游戏</title><description>星穹游戏介绍</description></item></channel></rss>".encode(),
+        "<rss><channel><item><link>https://example.org/xingyu</link><title>星宇股份公司介绍</title><description>汽车车灯业务</description></item></channel></rss>".encode(),
+    ]
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self, _size):
+            return bodies.pop(0)
+
+    def open_page(request, timeout):
+        calls.append(
+            (
+                urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)[
+                    "q"
+                ][0],
+                timeout,
+            )
+        )
+        return Response()
+
+    monkeypatch.setattr(
+        agent_sources,
+        "_research_opener",
+        lambda **_kwargs: SimpleNamespace(open=open_page),
+    )
+    rows = agent_sources.discover_sources(
+        "星宇股份", "星宇股份的业务与员工体验怎么样", "web"
+    )
+    assert len(calls) == 2
+    assert calls[0][0] != calls[1][0]
+    assert calls[1][0] == '"星宇股份"'
+    assert all(0 < timeout <= 4 for _, timeout in calls)
+    assert [row["url"] for row in rows] == ["https://example.org/xingyu"]
+
+
+def test_bing_connection_failure_retries_same_provider_once_within_budget(monkeypatch):
+    import urllib.error
+
+    calls = []
+    monkeypatch.setattr(agent_sources, "validate_public_http_url", lambda *a, **k: None)
+    monkeypatch.setattr(agent_sources, "_source_url", lambda url, site: url)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self, _size):
+            return "<rss><channel><item><link>https://example.org/company</link><title>星宇股份公司介绍</title></item></channel></rss>".encode()
+
+    def open_page(request, timeout):
+        calls.append((request.full_url, timeout))
+        if len(calls) == 1:
+            raise urllib.error.URLError("temporary connection failure")
+        return Response()
+
+    monkeypatch.setattr(
+        agent_sources,
+        "_research_opener",
+        lambda **_kwargs: SimpleNamespace(open=open_page),
+    )
+    rows = agent_sources.discover_sources(
+        "星宇股份", "星宇股份怎么样", "web", timeout=2
+    )
+    assert len(calls) == 2
+    assert calls[0][0] == calls[1][0]
+    assert all(0 < timeout <= 2 for _, timeout in calls)
+    assert [row["url"] for row in rows] == ["https://example.org/company"]
+
+
 def test_benefits_search_rejects_generic_hits_and_uses_one_bounded_fallback(
     monkeypatch,
 ):
@@ -1267,9 +1384,9 @@ def test_benefits_search_rejects_generic_hits_and_uses_one_bounded_fallback(
     monkeypatch.setattr(agent_sources, "_source_url", lambda url, site: url)
     bodies = [
         (
-            b"<rss><channel><item><link>https://www.qq.com/</link>"
-            b"<title>Tencent home</title></item></channel></rss>"
-        ),
+            "<rss><channel><item><link>https://www.qq.com/</link>"
+            "<title>腾讯首页</title></item></channel></rss>"
+        ).encode(),
         (
             '<a class="result__a" href="//duckdu'
             "ckgo.com/l/?uddg=https%3A%2F%2Fexam"

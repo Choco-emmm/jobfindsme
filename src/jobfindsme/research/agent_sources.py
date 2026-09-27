@@ -295,6 +295,13 @@ def _topic_relevant(row: dict, question: str) -> bool:
     )
 
 
+def _company_relevant(row: dict, company: str) -> bool:
+    # Search snippets are only candidate hints. A short company name must be
+    # visible in the hint before spending an original-page read on it.
+    hint = row.get("title", "") + " " + row.get("summary_hint", "")
+    return company.strip().casefold() in hint.casefold()
+
+
 class _SearchHtml(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -357,7 +364,11 @@ def _fallback_discovery(
             _source_url(target, site)
         except (ValueError, OSError):
             continue
-        if target in seen or not _topic_relevant(row, question):
+        if (
+            target in seen
+            or not _company_relevant(row, company)
+            or not _topic_relevant(row, question)
+        ):
             continue
         seen.add(target)
         rows.append(
@@ -415,54 +426,83 @@ def discover_sources(
     if remaining <= 0:
         raise TimeoutError("research discovery time budget exhausted")
     domain, label, source_type = SITES[site]
-    query = urllib.parse.urlencode(
-        {
-            "q": f'"{company.strip()}" {question.strip()}'
-            + (f" site:{domain}" if domain else ""),
-            "format": "rss",
-        }
-    )
-    request = urllib.request.Request(
-        f"https://www.bing.com/search?{query}",
-        headers={"User-Agent": "JobFindsMe/desktop-research"},
-    )
     validate_public_http_url(
         "https://www.bing.com", resolve_dns=True, require_https=True
     )
     opener = _research_opener(search=True)
-    with opener.open(request, timeout=max(0.1, min(4, remaining))) as response:
-        body = response.read(1_000_000)
-    root = ET.fromstring(body)
-    hits = []
-    seen = set()
-    for item in root.findall(".//item")[:12]:
-        url = (item.findtext("link") or "").strip()
-        try:
-            _source_url(url, site)
-        except (ValueError, OSError):
-            continue
-        if url in seen:
-            continue
-        seen.add(url)
-        summary = html.unescape(
-            re.sub(r"<[^>]+>", " ", item.findtext("description") or "")
+    network_retry_used = False
+
+    def rss_hits(search_text: str) -> list[dict]:
+        nonlocal network_retry_used
+        query = urllib.parse.urlencode(
+            {"q": search_text + (f" site:{domain}" if domain else ""), "format": "rss"}
         )
-        hits.append(
-            {
-                "url": url,
-                "title": (item.findtext("title") or "").strip()[:300],
-                "summary_hint": " ".join(summary.split())[:500],
-                "search_published_at": _published_at(item.findtext("pubDate")),
-                "site": site,
-                "platform": label,
-                "source_type": source_type,
-                "status": "search_hint_only",
-            }
+        request = urllib.request.Request(
+            f"https://www.bing.com/search?{query}",
+            headers={"User-Agent": "JobFindsMe/desktop-research"},
         )
-        if len(hits) >= 6:
-            break
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("research discovery time budget exhausted")
+            try:
+                with opener.open(
+                    request, timeout=max(0.1, min(4, remaining))
+                ) as response:
+                    body = response.read(1_000_000)
+                break
+            except urllib.error.HTTPError:
+                raise
+            except (urllib.error.URLError, TimeoutError):
+                if network_retry_used or deadline - time.monotonic() <= 0.1:
+                    raise
+                network_retry_used = True
+        root = ET.fromstring(body)
+        hits, seen = [], set()
+        for item in root.findall(".//item")[:12]:
+            url = (item.findtext("link") or "").strip()
+            try:
+                _source_url(url, site)
+            except (ValueError, OSError):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            summary = html.unescape(
+                re.sub(r"<[^>]+>", " ", item.findtext("description") or "")
+            )
+            hits.append(
+                {
+                    "url": url,
+                    "title": (item.findtext("title") or "").strip()[:300],
+                    "summary_hint": " ".join(summary.split())[:500],
+                    "search_published_at": _published_at(item.findtext("pubDate")),
+                    "site": site,
+                    "platform": label,
+                    "source_type": source_type,
+                    "status": "search_hint_only",
+                }
+            )
+            if len(hits) >= 6:
+                break
+        return hits
+
+    hits = rss_hits(f'"{company.strip()}" {question.strip()}')
+    if hits and not any(_company_relevant(row, company) for row in hits):
+        # A noisy broad query gets one shorter request to the same provider.
+        # Any HTTP or verification error propagates; there is no bypass.
+        hits = rss_hits(f'"{company.strip()}"')
+        return [
+            row
+            for row in hits
+            if _company_relevant(row, company)
+            and _topic_relevant(row, original_question or question)
+        ]
     relevant = [
-        row for row in hits if _topic_relevant(row, original_question or question)
+        row
+        for row in hits
+        if _company_relevant(row, company)
+        and _topic_relevant(row, original_question or question)
     ]
     if relevant:
         return relevant
@@ -533,6 +573,8 @@ def read_original_page(
             else "rate_limited"
             if error.code == 429
             else "restricted"
+            if error.code in (401, 403)
+            else "read_failed"
         )
         return {
             "url": url,
