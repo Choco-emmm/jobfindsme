@@ -1,5 +1,16 @@
 import type {ResearchChatTurn} from "./contracts";
 
+/** Require a direct, affirmative request before storing a separate report. */
+export function explicitReportRequest(question:string):boolean{
+  const text=question.replace(/[“「][^”」]*[”」]|"[^"]*"|'[^']*'/gu,"").trim();
+  if(/(?:不要|不用|无需|不必|别|不需要|只回答|只聊天)[^。！？\n]{0,18}报告/u.test(text))return false;
+  if(/^(?:解释|什么是|如何|怎么|为什么|讨论|分析|介绍|总结|JD|岗位描述|以下)/u.test(text)||/(?:如何|怎么|怎样)[^。！？\n]{0,12}(?:生成|制作|写)[^。！？\n]{0,12}报告/u.test(text))return false;
+  const action=/(?:生成|保存|写|制作|整理|出)(?:一份|一个|份)?[^。！？\n]{0,12}(?:研究)?报告/u;
+  return /^(?:请|帮我|给我|为我)/u.test(text)&&action.test(text.slice(0,60))||
+    /^(?:生成|保存|写|制作|整理|出)/u.test(text)&&action.test(text.slice(0,40))||
+    /(?:，|；|然后|并|再)\s*请?\s*(?:生成|保存|写|制作|整理|出)[^。！？\n]{0,16}报告/u.test(text);
+}
+
 // Only the model copy is bounded; saved conversation turns remain complete.
 export function modelHistoryWithinBudget(history:ResearchChatTurn[],maxChars=20000):ResearchChatTurn[]{
   const selected:ResearchChatTurn[]=[];let used=0;

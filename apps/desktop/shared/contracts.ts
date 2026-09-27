@@ -381,10 +381,11 @@ export type PromptTurnInput = {
 
 export type ModelProtocol = "openai_compatible" | "anthropic" | "gemini";
 
-export type ResearchChatTurn = {role:"user"|"assistant";text:string;reportId?:string;searchQuery?:string;evidence?:ResearchEvidence[]};
+export type ResearchChatProcessStep = {tool:string;status:string;site?:string;count?:number};
+export type ResearchChatTurn = {role:"user"|"assistant";text:string;reportId?:string;searchQuery?:string;evidence?:ResearchEvidence[];process?:ResearchChatProcessStep[]};
 export type ResearchChatInput = {request_id:string;session_id:string;workspace_id:string;connection_id:string;question:string;research:boolean;job_id?:string;company?:string;title?:string;history:ResearchChatTurn[]};
-export type ResearchChatDelta = {request_id:string;session_id:string;workspace_id:string;delta:string};
-export type ResearchChatResult = {text:string;report?:ResearchReport;company?:string;researched?:boolean;evidence?:ResearchEvidence[]};
+export type ResearchChatDelta = {request_id:string;session_id:string;workspace_id:string;delta?:string;progress?:{tool:string;status:"started"|"completed"|"failed"}};
+export type ResearchChatResult = {text:string;report?:ResearchReport;company?:string;researched?:boolean;evidence?:ResearchEvidence[];process?:ResearchChatProcessStep[]};
 
 export type ModelConnectionInput = {
   connection_id?: string;

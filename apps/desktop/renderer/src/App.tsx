@@ -23,7 +23,7 @@ import type {
 type WorkPage = "discover" | "research" | "records";
 type Page = WorkPage | "settings";
 type SettingsTab = "sources" | "models" | "about";
-const navItems: Array<[string, WorkPage]> = [["找工作", "discover"], ["岗位研究", "research"], ["已看过", "records"]];
+const navItems: Array<[string, WorkPage]> = [["找工作", "discover"], ["求职助手", "research"], ["已看过", "records"]];
 const settingsItems: Array<[string, SettingsTab]> = [["岗位来源", "sources"], ["模型设置", "models"], ["版本更新", "about"]];
 export function App() {
   const [chosenSources,setChosenSources] = useState<string[]>(()=>readSelectedSources(localStorage.getItem("jfm.sources.selected")));

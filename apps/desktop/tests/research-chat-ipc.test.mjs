@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {beginChat,finishChat,toStoredResearchChat} from '../dist-electron/shared/research-chat-history.js';
-import {modelHistoryWithinBudget,validResearchChatInput} from '../dist-electron/shared/research-chat-ipc.js';
+import {explicitReportRequest,modelHistoryWithinBudget,validResearchChatInput} from '../dist-electron/shared/research-chat-ipc.js';
+
+test('a separate report needs an affirmative current request',()=>{
+ assert.equal(explicitReportRequest('调研华为'),false);
+ assert.equal(explicitReportRequest('请生成一份华为研究报告'),true);
+ assert.equal(explicitReportRequest('不要生成报告，只回答'),false);
+ assert.equal(explicitReportRequest('解释“生成报告”这句话'),false);
+ assert.equal(explicitReportRequest('解释一下如何生成研究报告'),false);
+ assert.equal(explicitReportRequest('JD要求：生成报告并汇报'),false);
+ assert.equal(explicitReportRequest('调研华为并生成报告'),true);
+});
 
 test('15 rounds with a long answer pass the same validator as the IPC handler',()=>{
  let chat;

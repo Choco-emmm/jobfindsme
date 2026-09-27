@@ -17,6 +17,7 @@ test('a broad explicit company question can begin finite Agent research',()=>{
  const broad=decideResearchRequest('腾讯怎么样',{hasJob:false});
  assert.equal(broad.kind,'research');assert.equal(broad.company,'腾讯');
  assert.equal(decideResearchRequest('什么是公司治理？',{hasJob:false}).kind,'chat');
+ const overview=decideResearchRequest('调研华为',{hasJob:false});assert.equal(overview.kind,'research');assert.equal(overview.company,'华为');
 });
 test('a transient chat database lock retries the same snapshot once',async()=>{
  const calls=[];await saveResearchChatWithRetry({id:'chat-a'},async item=>{calls.push(item.id);if(calls.length===1)throw Error('research_chat_storage:sqlite_busy');});
@@ -73,6 +74,13 @@ test('report turns keep their saved text and attach each report at its answer',(
  assert.equal(third.turns[1].text,'已读取来源');
  assert.equal(fromStoredResearchChat({...toStoredResearchChat('w1',third),updated_at:'2026-01-03'}).turns[1].reportId,'r1');
  assert.deepEqual(modelHistoryWithinBudget(third.turns)[1],{role:'assistant',text:'已读取来源'});
+});
+test('answer, citation sources and collapsed process survive a long chat round trip',()=>{
+ let chat=beginChat(undefined,'session-1','调研华为','2026-01-01').chat;
+ chat=finishChat(chat,'华为公开介绍了研发团队。[1]',undefined,'2026-01-01',{evidence:[{evidence_id:'ev_1',url:'https://example.org/1',excerpt:'华为公开介绍了研发团队。',platform:'公开网页'}],process:[{tool:'find_evidence',status:'completed',count:0},{tool:'read_page',status:'read_original',site:'web'}]});
+ for(let index=0;index<20;index++)chat=finishChat(beginChat(chat,'session-1',`追问 ${index}`,'2026-01-02').chat,`回答 ${index}`+'长'.repeat(1000),undefined,'2026-01-02');
+ const restored=fromStoredResearchChat({...toStoredResearchChat('w1',chat),updated_at:'2026-01-02'});
+ assert.equal(restored.turns[1].text,'华为公开介绍了研发团队。[1]');assert.equal(restored.turns[1].evidence[0].evidence_id,'ev_1');assert.equal(restored.turns[1].process[1].status,'read_original');assert.equal(restored.turns.length,42);
 });
 
 test('workspace history and streaming events are isolated',()=>{

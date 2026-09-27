@@ -15,7 +15,7 @@ import {runSourceCheckQueue} from "./sources/source-check-queue";
 import {executeBoundedSourceSearch} from "./sources/source-search-execution";
 import {readIsolatedResearchPage} from "./research/browser-page";
 import {ResearchRunController} from "./research/run-controller";
-import {validResearchChatInput} from "../shared/research-chat-ipc";
+import {explicitReportRequest,validResearchChatInput} from "../shared/research-chat-ipc";
 import { isAllowedSourceUrl, sourceBrowserSpecs, isSourceBrowserId, requiresElectronSourceSearch, summarizeSourceVerification, type SourceBrowserBounds } from "../shared/source-browser-policy";
 import type {
   ModelConnectionInput, ResumeConfirmation, ResumeEditInput, ResumeExportInput,
@@ -669,7 +669,7 @@ ipcMain.handle("desktop:run-research-chat",async(event,input:ResearchChatInput)=
     const apiKey=connection.credential_ref?secretStore.get(connection.credential_ref)||"":"";
     const {runPiResearchAgent}=await import("./research/pi-research-agent.mjs");
     if(run.signal.aborted)throw Error("cancelled");
-    return await runPiResearchAgent({workspaceId:input.workspace_id,sessionId:input.session_id,requestId:input.request_id,question:input.question,research:input.research,jobId:input.job_id,company:input.company,title:input.title,history:input.history},connection,apiKey,
+    return await runPiResearchAgent({workspaceId:input.workspace_id,sessionId:input.session_id,requestId:input.request_id,question:input.question,research:input.research,reportRequested:explicitReportRequest(input.question),jobId:input.job_id,company:input.company,title:input.title,history:input.history},connection,apiKey,
       {
         readResume:()=>apiClient!.previewAnalysisCopy({workspace_id:input.workspace_id,privacy_mode:"redact"}),
         listSavedJobs:()=>apiClient!.listJobTracking(input.workspace_id),
@@ -681,7 +681,8 @@ ipcMain.handle("desktop:run-research-chat",async(event,input:ResearchChatInput)=
         saveExecution:state=>apiClient!.saveAgentExecution(state),
         saveReport:state=>apiClient!.saveAgentReport(state),
       },
-      delta=>{if(!run.signal.aborted&&chatRuns.current===run)event.sender.send("desktop:research-chat-delta",{request_id:input.request_id,session_id:input.session_id,workspace_id:input.workspace_id,delta});},run.signal);
+      delta=>{if(!run.signal.aborted&&chatRuns.current===run)event.sender.send("desktop:research-chat-delta",{request_id:input.request_id,session_id:input.session_id,workspace_id:input.workspace_id,delta});},run.signal,
+      progress=>{if(!run.signal.aborted&&chatRuns.current===run)event.sender.send("desktop:research-chat-delta",{request_id:input.request_id,session_id:input.session_id,workspace_id:input.workspace_id,progress});});
   }finally{chatRuns.finish(run);}
 });
 ipcMain.handle("desktop:list-research-chats",async(event,workspaceId:string)=>{

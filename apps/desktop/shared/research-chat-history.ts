@@ -13,8 +13,8 @@ export function beginChat(chat:SavedResearchChat|undefined,id:string,question:st
   return {history,chat:{id,title:chat?.title||question.slice(0,40),updatedAt:at,turns:retry?turns:[...turns,{role:"user",text:question}],reportIds:chat?.reportIds||[],subjectCompany:chat?.subjectCompany,subjectTitle:chat?.subjectTitle,jobId:chat?.jobId,researchMode:chat?.researchMode,draft:question,pendingResearch:chat?.pendingResearch}};
 }
 
-export function finishChat(chat:SavedResearchChat,text:string,reportId:string|undefined,at:string):SavedResearchChat{
-  return {...chat,updatedAt:at,turns:[...chat.turns,{role:"assistant",text,...(reportId?{reportId}:{})}],reportIds:reportId?[...chat.reportIds,reportId]:chat.reportIds,draft:undefined,failure:undefined,pendingResearch:undefined};
+export function finishChat(chat:SavedResearchChat,text:string,reportId:string|undefined,at:string,details?:{evidence?:ResearchChatTurn["evidence"];process?:ResearchChatTurn["process"]}):SavedResearchChat{
+  return {...chat,updatedAt:at,turns:[...chat.turns,{role:"assistant",text,...(reportId?{reportId}:{}),...(details?.evidence?.length?{evidence:details.evidence}:{}),...(details?.process?.length?{process:details.process}:{})}],reportIds:reportId?[...chat.reportIds,reportId]:chat.reportIds,draft:undefined,failure:undefined,pendingResearch:undefined};
 }
 
 export function finishJobSearchChat(chat:SavedResearchChat,text:string,query:string,pending:PendingResearch|undefined,at:string):SavedResearchChat{

@@ -13,7 +13,7 @@ const bareName=/^[\p{Script=Han}\p{L}\p{N}· .-]{2,60}$/u;
 function namedCompany(value:string):string|undefined{
   const scoped=researchScopeFromQuestion(value).company;
   if(scoped&&!/^(?:这个|这家|该|某|公司)/u.test(scoped)&&!/(?:岗位|职位|职责)/u.test(scoped))return scoped;
-  const explicit=value.match(/^(?:帮我)?(?:研究|了解|查查|查一下|看看)\s*([\p{Script=Han}\p{L}\p{N}· .-]{2,40})\s*$/u)?.[1]?.trim();
+  const explicit=value.match(/^(?:帮我)?(?:研究|调研|了解|查查|查一下|看看)\s*([\p{Script=Han}\p{L}\p{N}· .-]{2,40})\s*$/u)?.[1]?.trim();
   return explicit&&!unknown.test(explicit)?explicit:undefined;
 }
 

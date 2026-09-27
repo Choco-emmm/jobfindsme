@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useEffect,useState} from "react";
 import type {ResearchReport,ResearchCorrectionInput,ResearchEvidence} from "../../../shared/contracts";
 import {userError} from "../../../shared/user-errors";
 
@@ -10,13 +10,14 @@ const readableLimit=(value:string)=>value.replace(/no_public_evidence|restricted
 const companyAngles=[['business','经营情况'],['listing','上市状态'],['positive','正面反馈'],['negative','负面反馈'],['workload','工作强度'],['benefits','日常福利']] as const;
 const jobAngles=[['role','岗位内容'],['development','岗位发展']] as const;
 
-export function ReputationEvidence({report,workspaceId,onReport,onSource}:{report?:ResearchReport;workspaceId:string;onReport(value:ResearchReport):void;onSource?(url:string):void}) {
+export function ReputationEvidence({report,workspaceId,onReport,onSource,focusedEvidenceId}:{report?:ResearchReport;workspaceId:string;onReport(value:ResearchReport):void;onSource?(url:string):void;focusedEvidenceId?:string}) {
   const [editing,setEditing]=useState<string>();
   const [kind,setKind]=useState<ResearchCorrectionInput["kind"]>("wrong_entity");
   const [note,setNote]=useState("");
   const [busy,setBusy]=useState(false);
   const [message,setMessage]=useState("");
   const [focusedEvidence,setFocusedEvidence]=useState<string>();
+  useEffect(()=>{if(focusedEvidenceId)setFocusedEvidence(focusedEvidenceId);},[focusedEvidenceId]);
   const entries=report?.evidence||[];
   const citationNumbers=new Map(entries.map((item,index)=>[item.evidence_id,index+1]));
   const topics=report?.job_context?.research_topics||[];

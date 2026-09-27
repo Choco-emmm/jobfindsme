@@ -479,6 +479,8 @@ nav button.active{background:var(--surface-selected);color:var(--text);box-shado
 
 /* Distinct website/search actions and a live, neutral omnibox. */
 .citation-button{display:inline;border:0;background:transparent;color:#2563eb;padding:0 2px;font:inherit;cursor:pointer}.citation-button:hover,.citation-button:focus-visible{text-decoration:underline}.research-focused-evidence mark{background:#fff1aa;color:inherit}
+.research-source-focused{outline:2px solid #2563eb;outline-offset:3px}
+.research-answer-heading{font-size:1.05rem;margin:12px 0 4px}.research-answer-line,.research-answer-list{margin:0 0 4px;white-space:pre-wrap}.research-answer-list{padding-left:1em;text-indent:-1em}
 .browser-start-modes{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}.browser-start-modes button{flex:1;border:0;border-radius:0;background:transparent;padding:10px 4px;color:var(--text-muted)}.browser-start-modes button[aria-selected=true]{color:var(--text);border-bottom:2px solid var(--ink);font-weight:600}
 .native-browser-slot:has(.browser-new-page){grid-template-columns:minmax(0,1fr);justify-items:center;align-content:start}
 .browser-start-modes button{white-space:nowrap}
