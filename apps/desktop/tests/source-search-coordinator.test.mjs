@@ -37,3 +37,22 @@ test('Alibaba uses its existing browser collector without a known unsupported lo
     manager:{collectCareer:async()=>{careerCalls++;return {records:[],next_cursor:null};}},isCancelled:()=>false});
  assert.equal(publicCalls,0);assert.equal(careerCalls,1);assert.equal(result.pages.company_03.length,1);
 });
+
+test('a failed public continuation never falls back to a first-page browser search',async()=>{
+ let browserCalls=0;
+ const result=await collectBrowserSourcePages({source_ids:['liepin'],workspace_id:'w1',intent:'Python',source_cursor:'2'},
+   {allowed_source_ids:['liepin'],keywords:['Python'],max_pages:1,time_budget_seconds:10},
+   {client:{publicSourcePages:async()=>{throw Error('source_timeout:public page');}},manager:{collectCareer:async()=>{browserCalls++;return {records:[],next_cursor:null};}},isCancelled:()=>false});
+ assert.equal(browserCalls,0);
+ assert.match(result.errors.liepin,/source_timeout|unsupported_cursor/);
+ assert.equal(result.pages.liepin,undefined);
+});
+
+test('a browser-only source rejects a continuation cursor it cannot honor',async()=>{
+ let browserCalls=0;
+ const result=await collectBrowserSourcePages({source_ids:['company_03'],workspace_id:'w1',intent:'Python',source_cursor:'2'},
+   {allowed_source_ids:['company_03'],keywords:['Python'],max_pages:1,time_budget_seconds:10},
+   {client:{},manager:{collectCareer:async()=>{browserCalls++;return {records:[],next_cursor:null};}},isCancelled:()=>false});
+ assert.equal(browserCalls,0);
+ assert.match(result.errors.company_03,/unsupported_cursor/);
+});

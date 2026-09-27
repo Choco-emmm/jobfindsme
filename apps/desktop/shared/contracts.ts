@@ -235,6 +235,7 @@ export type SourceSearchRun = {
 };
 
 export type SourceSearchResponse = {
+  batch_failures?:Array<{source_id:string;stage:"save"|"source_status";message:string}>;
   planned_queries?:Array<{source_id:string;keyword:string;city:string}>;
   executed_queries?:Array<{source_id:string;keyword:string;city:string}>;
   local_filters?:SearchFilters;

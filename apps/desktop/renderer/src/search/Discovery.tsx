@@ -120,7 +120,11 @@ export function Discovery({ active, data, onError, onResearch,selectedSources,on
       const keepPrevious=!preserve&&!response.result_page.total&&!!page?.items.length&&!!(failed.length||blocked.length);
       if(!keepPrevious){filterBaseRun.current=response.result_page.run_id;setResult(previous=>({...response,
         source_runs:preserve?[...(previous?.source_runs||[]).filter(run=>!response.source_runs.some(next=>next.source_id===run.source_id)),...response.source_runs]:response.source_runs}));}
-      if(failed.length||blocked.length)setSearchError(userError(failed.find(run=>["risk_control","login_required"].includes(run.stop_reason))?.stop_reason || (blocked.length?blocked[0]:failed.length===response.source_runs.length&&!response.result_page.total?"source_contract_error":"partial")));
+      if(failed.length||blocked.length||response.batch_failures?.length){
+        const base=userError(failed.find(run=>["risk_control","login_required"].includes(run.stop_reason))?.stop_reason || (blocked.length?blocked[0]:failed.length===response.source_runs.length&&!response.result_page.total?"source_contract_error":"partial"));
+        const batchNotice=response.batch_failures?.map(item=>`${sources.find(source=>source.source_id===item.source_id)?.name||item.source_id}${item.stage==="save"?"的读取结果保存失败":"的来源状态更新失败"}`).join("；");
+        setSearchError(batchNotice?{...base,message:`${batchNotice}。已保存的岗位会保留。`}:base);
+      }
       if(response.result_page.total || (!failed.length&&!blocked.length)){setShowingPrevious(false);setPage(previous=>preserve&&previous&&previous.page!==1?{...previous,total:response.result_page.total,page_count:response.result_page.page_count}:response.result_page);setSelected(previous=>preserve&&previous?previous:response.result_page.items[0]);}
       setMatchingMessage(response.executed_queries?.length?`已检索：${response.keywords[0]}。远端仅使用首个城市与所列来源；薪资等其余筛选在本地进行。请核对岗位原文。`:`已计划检索「${response.keywords[0]}」，但本次没有完成来源请求。请查看来源状态。`);
     } catch (error) { if(epoch===searchEpoch.current)setSearchError(userError(error)); } finally { if(epoch===searchEpoch.current)setSearching(false); }
